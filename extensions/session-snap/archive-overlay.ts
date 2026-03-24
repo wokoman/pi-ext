@@ -67,6 +67,9 @@ function getMessageBlocks(sessionId: string): MessageBlock[] {
   return blocks;
 }
 
+// ── Left panel header: title + search + separator = 3 lines ──────────────────
+const LEFT_HEADER_LINES = 3;
+
 // ── Main component ───────────────────────────────────────────────────────────
 
 export class ArchiveOverlay implements Component, Focusable {
@@ -197,16 +200,32 @@ export class ArchiveOverlay implements Component, Focusable {
     if (len === 0) return;
     this.selectedIndex = Math.max(0, Math.min(len - 1, this.selectedIndex + delta));
 
-    const visH = this.getListVisibleCount();
+    // How many items (not lines) fit in the list area
+    const maxItems = this.getMaxListItems();
     if (this.selectedIndex < this.scrollOffset) {
       this.scrollOffset = this.selectedIndex;
-    } else if (this.selectedIndex >= this.scrollOffset + visH) {
-      this.scrollOffset = this.selectedIndex - visH + 1;
+    } else if (this.selectedIndex >= this.scrollOffset + maxItems) {
+      this.scrollOffset = this.selectedIndex - maxItems + 1;
     }
   }
 
-  private getListVisibleCount(): number {
-    return Math.max(3, Math.floor(this.getTermRows() * 0.75));
+  /**
+   * Compute the total content height (between top and bottom borders).
+   * overlay maxHeight is 85% of terminal, minus 2 for top/bottom border rows.
+   */
+  private getContentHeight(): number {
+    const termRows = this.getTermRows();
+    return Math.max(10, Math.floor(termRows * 0.80) - 2);
+  }
+
+  /**
+   * How many session items fit in the list area.
+   * Each item = 2 lines (name + metadata), plus LEFT_HEADER_LINES for header.
+   */
+  private getMaxListItems(): number {
+    const contentH = this.getContentHeight();
+    const available = contentH - LEFT_HEADER_LINES;
+    return Math.max(1, Math.floor(available / 2));
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -217,19 +236,17 @@ export class ArchiveOverlay implements Component, Focusable {
     const leftW = Math.max(25, Math.floor(innerW * 0.40));
     const rightW = innerW - leftW - 1; // -1 for center │
 
-    // ── Left panel: search + list ──
-    const leftLines = this.renderLeftPanel(leftW);
+    // Compute fixed height for content area
+    const targetH = this.getContentHeight();
 
-    // ── Right panel: preview ──
+    // ── Left panel: search + list (rendered to exactly targetH lines) ──
+    const leftLines = this.renderLeftPanel(leftW, targetH);
+
+    // ── Right panel: preview (rendered to exactly targetH lines) ──
     const selected = this.filteredSessions[this.selectedIndex];
     const rightLines = selected
-      ? this.buildPreview(selected, rightW, leftLines.length)
-      : this.centeredMessage(th.fg("dim", "(no session selected)"), rightW, leftLines.length);
-
-    // ── Height = max of both panels ──
-    const targetH = Math.max(leftLines.length, rightLines.length);
-    while (leftLines.length < targetH) leftLines.push("");
-    while (rightLines.length < targetH) rightLines.push("");
+      ? this.buildPreview(selected, rightW, targetH)
+      : this.centeredMessage(th.fg("dim", "(no session selected)"), rightW, targetH);
 
     // ── Assemble framed output ──
     const lines: string[] = [];
@@ -238,14 +255,14 @@ export class ArchiveOverlay implements Component, Focusable {
     // Top border
     lines.push(th.fg("border", "╭" + "─".repeat(leftW) + "┬" + "─".repeat(rightW) + "╮"));
 
-    // Content rows
+    // Content rows (exactly targetH)
     for (let i = 0; i < targetH; i++) {
       lines.push(
         sep + padTo(leftLines[i] ?? "", leftW) + sep + padTo(rightLines[i] ?? "", rightW) + sep,
       );
     }
 
-    // Bottom border — footer hints
+    // Bottom border with footer hints
     const footer = this.confirmDelete
       ? " " + th.fg("error", th.bold("⚠ Delete permanently?")) + " " + th.fg("muted", "(y/n)")
       : " " +
@@ -266,7 +283,7 @@ export class ArchiveOverlay implements Component, Focusable {
 
   // ── Left panel ─────────────────────────────────────────────────────────────
 
-  private renderLeftPanel(w: number): string[] {
+  private renderLeftPanel(w: number, totalH: number): string[] {
     const th = this.theme;
     const lines: string[] = [];
 
@@ -282,47 +299,48 @@ export class ArchiveOverlay implements Component, Focusable {
     // Separator
     lines.push(th.fg("border", " " + "─".repeat(Math.max(1, w - 2))));
 
-    // Session list
+    // Session list — fill remaining space
     const sessions = this.filteredSessions;
-    const visH = this.getListVisibleCount();
+    const maxItems = this.getMaxListItems();
 
     if (sessions.length === 0) {
       const msg = this.searchInput.getValue() ? "(no matches)" : "(empty archive)";
       lines.push("");
       lines.push(th.fg("dim", "  " + msg));
-      return lines;
-    }
+    } else {
+      const end = Math.min(sessions.length, this.scrollOffset + maxItems);
+      for (let i = this.scrollOffset; i < end; i++) {
+        const s = sessions[i];
+        const isSel = i === this.selectedIndex;
 
-    const end = Math.min(sessions.length, this.scrollOffset + visH);
-    for (let i = this.scrollOffset; i < end; i++) {
-      const s = sessions[i];
-      const isSel = i === this.selectedIndex;
+        const name = s.name || s.firstMessage.split("\n")[0]?.trim() || "(unnamed)";
+        const time = relativeTime(s.lastActivityAt);
+        const msgs = `${s.userMessageCount + s.assistantMessageCount}msg`;
+        const proj = projectName(s.cwd);
 
-      const name = s.name || s.firstMessage.split("\n")[0]?.trim() || "(unnamed)";
-      const time = relativeTime(s.lastActivityAt);
-      const msgs = `${s.userMessageCount + s.assistantMessageCount}msg`;
-      const proj = projectName(s.cwd);
+        // Line 1: cursor + name + time
+        let primary: string;
+        if (isSel) {
+          primary = th.fg("accent", " ▸ ") + th.bold(truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
+        } else {
+          primary = "   " + th.fg("muted", truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
+        }
+        lines.push(truncateToWidth(primary, w));
 
-      // Line 1: cursor + name (truncated)
-      let primary: string;
-      if (isSel) {
-        primary = th.fg("accent", " ▸ ") + th.bold(truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
-      } else {
-        primary = "   " + th.fg("muted", truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
+        // Line 2: project + metadata
+        const meta = `   ${th.fg("dim", proj)} · ${th.fg("dim", msgs)} · ${th.fg("dim", formatDuration(s.durationSeconds))}`;
+        lines.push(truncateToWidth(meta, w));
       }
-      lines.push(truncateToWidth(primary, w));
 
-      // Line 2: project + metadata
-      const meta = `   ${th.fg("dim", proj)} · ${th.fg("dim", msgs)} · ${th.fg("dim", formatDuration(s.durationSeconds))}`;
-      lines.push(truncateToWidth(meta, w));
+      // Scroll info (if scrollable)
+      if (sessions.length > maxItems) {
+        lines.push(th.fg("dim", `  ${this.scrollOffset + 1}–${end} of ${sessions.length}`));
+      }
     }
 
-    // Scroll info
-    if (sessions.length > visH) {
-      lines.push(th.fg("dim", `  ${this.scrollOffset + 1}–${end} of ${sessions.length}`));
-    }
-
-    return lines;
+    // Pad to exact height
+    while (lines.length < totalH) lines.push("");
+    return lines.slice(0, totalH);
   }
 
   // ── Right panel: preview ───────────────────────────────────────────────────
@@ -331,7 +349,7 @@ export class ArchiveOverlay implements Component, Focusable {
     const th = this.theme;
     const lines: string[] = [];
 
-    // Track selection changes to invalidate preview scroll
+    // Track selection changes
     if (session.id !== this.lastSelectedId) {
       this.lastSelectedId = session.id;
     }
@@ -351,10 +369,11 @@ export class ArchiveOverlay implements Component, Focusable {
     const headerH = lines.length;
     const contentH = h - headerH;
 
-    if (blocks.length === 0) {
-      const emptyLines = this.centeredMessage(th.fg("dim", "(no preview)"), w, contentH);
+    if (blocks.length === 0 || contentH <= 0) {
+      const emptyLines = this.centeredMessage(th.fg("dim", "(no preview)"), w, Math.max(0, contentH));
       lines.push(...emptyLines);
-      return lines;
+      while (lines.length < h) lines.push("");
+      return lines.slice(0, h);
     }
 
     // Render message blocks with Markdown (same style as session-switch)
@@ -368,7 +387,6 @@ export class ArchiveOverlay implements Component, Focusable {
         const pill = th.bold(th.inverse(th.fg("accent", " USER ")));
         allContentLines.push(" " + pill);
 
-        // User message with background
         const bgBlank = th.bg("userMessageBg", " ".repeat(w));
         allContentLines.push(bgBlank);
 
@@ -393,7 +411,7 @@ export class ArchiveOverlay implements Component, Focusable {
       lastRole = block.role;
     }
 
-    // Show from top
+    // Fill content area (truncate to available space)
     for (let i = 0; i < contentH; i++) {
       if (i < allContentLines.length) {
         lines.push(truncateToWidth(allContentLines[i], w));
@@ -402,10 +420,11 @@ export class ArchiveOverlay implements Component, Focusable {
       }
     }
 
-    return lines;
+    return lines.slice(0, h);
   }
 
   private centeredMessage(msg: string, w: number, h: number): string[] {
+    if (h <= 0) return [];
     const mid = Math.floor(h / 2);
     const vis = visibleWidth(msg);
     const padLeft = Math.max(0, Math.floor((w - vis) / 2));
