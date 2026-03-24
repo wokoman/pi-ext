@@ -235,6 +235,55 @@ export function deleteArchived(sessionId: string): void {
   db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
 }
 
+/** Message block for preview rendering */
+export interface MessageBlock {
+  role: "user" | "assistant";
+  text: string;
+}
+
+/** Decompress and extract message blocks from an archived session for preview */
+export function getArchivedMessageBlocks(sessionId: string): MessageBlock[] {
+  const db = getDb();
+  const data = db.prepare("SELECT jsonl_gzip FROM session_data WHERE session_id = ?").get(sessionId) as any;
+  if (!data) return [];
+
+  try {
+    const jsonl = gunzipSync(data.jsonl_gzip).toString("utf-8");
+    const blocks: MessageBlock[] = [];
+
+    for (const line of jsonl.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (entry.type !== "message" || !entry.message) continue;
+        const msg = entry.message;
+        if (msg.role !== "user" && msg.role !== "assistant") continue;
+
+        const text = extractMessageText(msg.content);
+        if (text.trim()) {
+          blocks.push({ role: msg.role, text: text.trim() });
+        }
+      } catch { /* skip malformed */ }
+    }
+
+    // Keep last N for preview
+    return blocks.length > 50 ? blocks.slice(blocks.length - 50) : blocks;
+  } catch {
+    return [];
+  }
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("\n");
+  }
+  return "";
+}
+
 /** Close database connection */
 export function closeDb(): void {
   if (_db) {

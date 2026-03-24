@@ -1,27 +1,73 @@
 /**
- * Archive overlay — TUI for browsing archived sessions.
+ * Archive overlay — mirrors session-switch's SplitOverlay look & feel.
  *
- * Always-visible search bar at top (like session-switch).
- * Split panel: session list on left, preview on right.
- * Arrow keys navigate list, typing filters, Enter restores.
+ * ╭── search input ────────────┬── preview ─────────────────────╮
+ * │ ▸ 2026-02-22  pi-ext       │  pi-ext                       │
+ * │   2026-02-23  lgtm-k8s     │  2026-02-22 20:12 · 12 msgs   │
+ * │   2026-02-24  skald         │  ──────────────────────────── │
+ * │   ...                       │   USER                        │
+ * │                             │  Add custom footer extension  │
+ * │                             │   AGENT                       │
+ * │                             │  I'll create a new...         │
+ * ╰─────────────────────────────┴───────────────────────────────╯
  */
 
 import type { Component, Focusable } from "@mariozechner/pi-tui";
-import { Input, truncateToWidth, visibleWidth, CURSOR_MARKER, matchesKey } from "@mariozechner/pi-tui";
+import { Input, Markdown, truncateToWidth, visibleWidth, CURSOR_MARKER } from "@mariozechner/pi-tui";
+import { matchesKey } from "@mariozechner/pi-tui";
+import type { Theme } from "@mariozechner/pi-coding-agent";
+import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import type { ArchivedSession } from "./types.js";
+import { type MessageBlock, getArchivedMessageBlocks } from "./archive.js";
 import { formatBytes, formatDuration, projectName } from "./scanner.js";
 
-export type ArchiveAction = { type: "restore"; sessionId: string } | { type: "delete"; sessionId: string } | { type: "close" };
+export type ArchiveAction =
+  | { type: "restore"; sessionId: string }
+  | { type: "delete"; sessionId: string }
+  | { type: "close" };
 
 interface ArchiveOverlayOptions {
   sessions: ArchivedSession[];
-  theme: any;
+  theme: Theme;
   getTermRows: () => number;
   getTermCols: () => number;
   requestRender: () => void;
   onDone: (action: ArchiveAction) => void;
   onSearch: (query: string) => ArchivedSession[];
 }
+
+/** Pad or truncate to exact visible width */
+function padTo(s: string, w: number): string {
+  const vis = visibleWidth(s);
+  if (vis >= w) return truncateToWidth(s, w);
+  return s + " ".repeat(w - vis);
+}
+
+function relativeTime(ms: number): string {
+  const diff = Date.now() - ms;
+  const minutes = Math.floor(diff / 60_000);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 30) return `${Math.floor(days / 30)}mo`;
+  if (days > 0) return `${days}d`;
+  if (hours > 0) return `${hours}h`;
+  if (minutes > 0) return `${minutes}m`;
+  return "now";
+}
+
+// ── Preview cache ────────────────────────────────────────────────────────────
+
+const previewCache = new Map<string, MessageBlock[]>();
+
+function getMessageBlocks(sessionId: string): MessageBlock[] {
+  const cached = previewCache.get(sessionId);
+  if (cached) return cached;
+  const blocks = getArchivedMessageBlocks(sessionId);
+  previewCache.set(sessionId, blocks);
+  return blocks;
+}
+
+// ── Main component ───────────────────────────────────────────────────────────
 
 export class ArchiveOverlay implements Component, Focusable {
   private _focused = false;
@@ -39,18 +85,21 @@ export class ArchiveOverlay implements Component, Focusable {
   private scrollOffset = 0;
   private searchInput: Input;
   private confirmDelete = false;
-  private theme: any;
+  private theme: Theme;
+  private mdTheme: any;
   private getTermRows: () => number;
   private getTermCols: () => number;
   private requestRender: () => void;
   private onDone: (action: ArchiveAction) => void;
   private onSearch: (query: string) => ArchivedSession[];
-  private previewScroll = 0;
+
+  private lastSelectedId: string | undefined;
 
   constructor(opts: ArchiveOverlayOptions) {
     this.allSessions = opts.sessions;
     this.filteredSessions = opts.sessions;
     this.theme = opts.theme;
+    this.mdTheme = getMarkdownTheme();
     this.getTermRows = opts.getTermRows;
     this.getTermCols = opts.getTermCols;
     this.requestRender = opts.requestRender;
@@ -62,18 +111,13 @@ export class ArchiveOverlay implements Component, Focusable {
 
   private doSearch(): void {
     const query = this.searchInput.getValue().trim();
-    if (query) {
-      this.filteredSessions = this.onSearch(query);
-    } else {
-      this.filteredSessions = this.allSessions;
-    }
+    this.filteredSessions = query ? this.onSearch(query) : this.allSessions;
     this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filteredSessions.length - 1));
     this.scrollOffset = 0;
-    this.previewScroll = 0;
   }
 
   handleInput(data: string): void {
-    // ── Confirm delete mode ──
+    // ── Confirm delete ──
     if (this.confirmDelete) {
       if (data === "y" || data === "Y") {
         const session = this.filteredSessions[this.selectedIndex];
@@ -88,9 +132,8 @@ export class ArchiveOverlay implements Component, Focusable {
       return;
     }
 
-    // ── Escape → close ──
+    // ── Escape ──
     if (matchesKey(data, "escape")) {
-      // If there's a search query, clear it first
       if (this.searchInput.getValue()) {
         this.searchInput.setValue("");
         this.doSearch();
@@ -101,58 +144,17 @@ export class ArchiveOverlay implements Component, Focusable {
       return;
     }
 
-    // ── Navigation keys (always work, even while typing) ──
+    // ── Navigation ──
     if (matchesKey(data, "up")) {
       this.moveSelection(-1);
       this.requestRender();
       return;
     }
-
     if (matchesKey(data, "down")) {
       this.moveSelection(1);
       this.requestRender();
       return;
     }
-
-    // ── Enter → restore selected session ──
-    if (matchesKey(data, "return")) {
-      const session = this.filteredSessions[this.selectedIndex];
-      if (session) {
-        this.onDone({ type: "restore", sessionId: session.id });
-      }
-      return;
-    }
-
-    // ── Ctrl+D → delete selected session ──
-    if (matchesKey(data, "ctrl+d")) {
-      if (this.filteredSessions[this.selectedIndex]) {
-        this.confirmDelete = true;
-        this.requestRender();
-      }
-      return;
-    }
-
-    // ── Ctrl+U → clear search ──
-    if (matchesKey(data, "ctrl+u")) {
-      this.searchInput.setValue("");
-      this.doSearch();
-      this.requestRender();
-      return;
-    }
-
-    // ── Page Up/Down → scroll preview ──
-    if (matchesKey(data, "pageDown") || matchesKey(data, "ctrl+f")) {
-      this.previewScroll += 10;
-      this.requestRender();
-      return;
-    }
-    if (matchesKey(data, "pageUp") || matchesKey(data, "ctrl+b")) {
-      this.previewScroll = Math.max(0, this.previewScroll - 10);
-      this.requestRender();
-      return;
-    }
-
-    // ── Tab → cycle through sessions (quick nav) ──
     if (matchesKey(data, "tab")) {
       this.moveSelection(1);
       this.requestRender();
@@ -164,7 +166,27 @@ export class ArchiveOverlay implements Component, Focusable {
       return;
     }
 
-    // ── Everything else → search input (typing filters the list) ──
+    // ── Actions ──
+    if (matchesKey(data, "return")) {
+      const session = this.filteredSessions[this.selectedIndex];
+      if (session) this.onDone({ type: "restore", sessionId: session.id });
+      return;
+    }
+    if (matchesKey(data, "ctrl+d")) {
+      if (this.filteredSessions[this.selectedIndex]) {
+        this.confirmDelete = true;
+        this.requestRender();
+      }
+      return;
+    }
+    if (matchesKey(data, "ctrl+u")) {
+      this.searchInput.setValue("");
+      this.doSearch();
+      this.requestRender();
+      return;
+    }
+
+    // ── Everything else → search input ──
     this.searchInput.handleInput(data);
     this.doSearch();
     this.requestRender();
@@ -173,11 +195,8 @@ export class ArchiveOverlay implements Component, Focusable {
   private moveSelection(delta: number): void {
     const len = this.filteredSessions.length;
     if (len === 0) return;
-
     this.selectedIndex = Math.max(0, Math.min(len - 1, this.selectedIndex + delta));
-    this.previewScroll = 0;
 
-    // Adjust scroll to keep selection visible
     const visH = this.getListVisibleCount();
     if (this.selectedIndex < this.scrollOffset) {
       this.scrollOffset = this.selectedIndex;
@@ -186,212 +205,216 @@ export class ArchiveOverlay implements Component, Focusable {
     }
   }
 
-  /** How many list items fit in the panel */
   private getListVisibleCount(): number {
-    return Math.max(3, this.getTermRows() - 12);
+    return Math.max(3, Math.floor(this.getTermRows() * 0.75));
   }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   render(width: number): string[] {
     const th = this.theme;
+    const innerW = width - 2; // inside │ borders
+    const leftW = Math.max(25, Math.floor(innerW * 0.40));
+    const rightW = innerW - leftW - 1; // -1 for center │
+
+    // ── Left panel: search + list ──
+    const leftLines = this.renderLeftPanel(leftW);
+
+    // ── Right panel: preview ──
+    const selected = this.filteredSessions[this.selectedIndex];
+    const rightLines = selected
+      ? this.buildPreview(selected, rightW, leftLines.length)
+      : this.centeredMessage(th.fg("dim", "(no session selected)"), rightW, leftLines.length);
+
+    // ── Height = max of both panels ──
+    const targetH = Math.max(leftLines.length, rightLines.length);
+    while (leftLines.length < targetH) leftLines.push("");
+    while (rightLines.length < targetH) rightLines.push("");
+
+    // ── Assemble framed output ──
     const lines: string[] = [];
-    const innerW = width - 4;
-    const leftW = Math.max(30, Math.floor(innerW * 0.45));
-    const rightW = innerW - leftW - 1;
     const sep = th.fg("border", "│");
 
-    // ── Title ──
-    lines.push("");
-    const title = th.bold(th.fg("accent", "📦 Session Archive"));
-    const count = th.fg("dim", `(${this.filteredSessions.length}${this.filteredSessions.length !== this.allSessions.length ? "/" + this.allSessions.length : ""} sessions)`);
-    lines.push(`  ${title}  ${count}`);
-    lines.push("");
+    // Top border
+    lines.push(th.fg("border", "╭" + "─".repeat(leftW) + "┬" + "─".repeat(rightW) + "╮"));
 
-    // ── Search bar (always visible, always editable) ──
-    const searchLabel = th.fg("accent", "🔍 ");
-    const inputLines = this.searchInput.render(innerW - 4);
-    lines.push("  " + searchLabel + (inputLines[0] ?? ""));
-    lines.push("  " + th.fg("border", "─".repeat(innerW)));
-
-    // ── Split panel ──
-    const panelH = this.getListVisibleCount();
-    const leftLines = this.renderList(leftW, panelH);
-    const rightLines = this.renderPreview(rightW, panelH);
-
-    for (let i = 0; i < panelH; i++) {
-      const left = i < leftLines.length ? leftLines[i] : "";
-      const right = i < rightLines.length ? rightLines[i] : "";
-      lines.push("  " + padToWidth(left, leftW) + sep + padToWidth(right, rightW));
+    // Content rows
+    for (let i = 0; i < targetH; i++) {
+      lines.push(
+        sep + padTo(leftLines[i] ?? "", leftW) + sep + padTo(rightLines[i] ?? "", rightW) + sep,
+      );
     }
 
-    // ── Footer ──
-    lines.push("  " + th.fg("border", "─".repeat(innerW)));
+    // Bottom border — footer hints
+    const footer = this.confirmDelete
+      ? " " + th.fg("error", th.bold("⚠ Delete permanently?")) + " " + th.fg("muted", "(y/n)")
+      : " " +
+        th.fg("dim", "↑↓") + " " + th.fg("muted", "nav") + "  " +
+        th.fg("dim", "⏎") + " " + th.fg("muted", "restore") + "  " +
+        th.fg("dim", "^D") + " " + th.fg("muted", "delete") + "  " +
+        th.fg("dim", "^U") + " " + th.fg("muted", "clear") + "  " +
+        th.fg("dim", "esc") + " " + th.fg("muted", "close");
 
-    if (this.confirmDelete) {
-      lines.push("  " + th.fg("error", th.bold("⚠ Delete permanently? ")) + th.fg("muted", "(y/n)"));
-    } else {
-      const hints = [
-        [th.fg("dim", "↑↓"), th.fg("muted", "navigate")],
-        [th.fg("dim", "Enter"), th.fg("muted", "restore")],
-        [th.fg("dim", "^D"), th.fg("muted", "delete")],
-        [th.fg("dim", "PgUp/Dn"), th.fg("muted", "scroll preview")],
-        [th.fg("dim", "^U"), th.fg("muted", "clear search")],
-        [th.fg("dim", "Esc"), th.fg("muted", "close")],
-      ];
-      lines.push("  " + hints.map(([k, d]) => `${k} ${d}`).join("  "));
-    }
-    lines.push("");
+    lines.push(
+      th.fg("border", "╰") +
+        padTo(footer, leftW + 1 + rightW) +
+        th.fg("border", "╯"),
+    );
 
     return lines;
   }
 
-  private renderList(w: number, h: number): string[] {
+  // ── Left panel ─────────────────────────────────────────────────────────────
+
+  private renderLeftPanel(w: number): string[] {
     const th = this.theme;
     const lines: string[] = [];
+
+    // Title + count
+    const title = th.bold(th.fg("accent", " 📦 Archive"));
+    const count = th.fg("dim", ` (${this.filteredSessions.length})`);
+    lines.push(title + count);
+
+    // Search input
+    const inputLines = this.searchInput.render(w - 5);
+    lines.push(" " + th.fg("accent", "🔍") + " " + (inputLines[0] ?? ""));
+
+    // Separator
+    lines.push(th.fg("border", " " + "─".repeat(Math.max(1, w - 2))));
+
+    // Session list
     const sessions = this.filteredSessions;
+    const visH = this.getListVisibleCount();
 
     if (sessions.length === 0) {
-      const msg = this.searchInput.getValue()
-        ? "(no matches)"
-        : "(no archived sessions)";
-      for (let i = 0; i < h; i++) {
-        if (i === Math.floor(h / 2)) {
-          lines.push(th.fg("dim", "  " + msg));
-        } else {
-          lines.push("");
-        }
-      }
+      const msg = this.searchInput.getValue() ? "(no matches)" : "(empty archive)";
+      lines.push("");
+      lines.push(th.fg("dim", "  " + msg));
       return lines;
     }
 
-    const end = Math.min(sessions.length, this.scrollOffset + h);
+    const end = Math.min(sessions.length, this.scrollOffset + visH);
     for (let i = this.scrollOffset; i < end; i++) {
       const s = sessions[i];
       const isSel = i === this.selectedIndex;
 
-      const date = new Date(s.lastActivityAt).toISOString().slice(0, 10);
-      const proj = padRight(projectName(s.cwd), 12);
-      const dur = padLeft(formatDuration(s.durationSeconds), 5);
-      const msgs = `${s.userMessageCount}msg`;
+      const name = s.name || s.firstMessage.split("\n")[0]?.trim() || "(unnamed)";
+      const time = relativeTime(s.lastActivityAt);
+      const msgs = `${s.userMessageCount + s.assistantMessageCount}msg`;
+      const proj = projectName(s.cwd);
 
-      // First line: cursor + date + project + metadata
-      let line: string;
+      // Line 1: cursor + name (truncated)
+      let primary: string;
       if (isSel) {
-        line = th.fg("accent", "▸ ") + th.bold(th.fg("accent", date)) + " " + th.bold(proj);
-        line += th.fg("muted", ` ${dur} ${msgs}`);
+        primary = th.fg("accent", " ▸ ") + th.bold(truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
       } else {
-        line = "  " + th.fg("dim", date) + " " + th.fg("muted", proj);
-        line += th.fg("dim", ` ${dur} ${msgs}`);
+        primary = "   " + th.fg("muted", truncateToWidth(name, w - 12)) + " " + th.fg("dim", time);
       }
-      lines.push(truncateToWidth(line, w));
+      lines.push(truncateToWidth(primary, w));
 
-      // Second line: session name or first message (only for selected)
-      if (isSel) {
-        const preview = s.name || s.firstMessage.replace(/\n/g, " ") || "(empty)";
-        lines.push("  " + th.fg("dim", "  " + truncateToWidth(preview, w - 5)));
-      }
+      // Line 2: project + metadata
+      const meta = `   ${th.fg("dim", proj)} · ${th.fg("dim", msgs)} · ${th.fg("dim", formatDuration(s.durationSeconds))}`;
+      lines.push(truncateToWidth(meta, w));
     }
 
-    // Scroll indicator if needed
-    if (sessions.length > h) {
-      while (lines.length < h - 1) lines.push("");
-      const pct = Math.round(((this.scrollOffset + 1) / Math.max(1, sessions.length - h + 1)) * 100);
-      lines.push(th.fg("dim", `  ${this.scrollOffset + 1}-${end} of ${sessions.length} (${pct}%)`));
+    // Scroll info
+    if (sessions.length > visH) {
+      lines.push(th.fg("dim", `  ${this.scrollOffset + 1}–${end} of ${sessions.length}`));
     }
 
-    // Pad to height
-    while (lines.length < h) lines.push("");
-    return lines.slice(0, h);
+    return lines;
   }
 
-  private renderPreview(w: number, h: number): string[] {
+  // ── Right panel: preview ───────────────────────────────────────────────────
+
+  private buildPreview(session: ArchivedSession, w: number, h: number): string[] {
     const th = this.theme;
     const lines: string[] = [];
 
-    const session = this.filteredSessions[this.selectedIndex];
-    if (!session) {
-      for (let i = 0; i < h; i++) {
-        lines.push(i === Math.floor(h / 2) ? th.fg("dim", " (no session selected)") : "");
-      }
-      return lines;
+    // Track selection changes to invalidate preview scroll
+    if (session.id !== this.lastSelectedId) {
+      this.lastSelectedId = session.id;
     }
 
     // ── Header ──
-    const name = session.name || projectName(session.cwd);
-    lines.push(" " + th.bold(th.fg("accent", name)));
+    const name = session.name || session.firstMessage.split("\n")[0]?.trim() || "(unnamed)";
+    lines.push(truncateToWidth(" " + th.bold(th.fg("accent", name)), w));
 
-    const dateStr = new Date(session.createdAt).toISOString().replace("T", " ").slice(0, 16);
-    lines.push(" " + th.fg("dim", dateStr));
+    const msgs = `${session.userMessageCount + session.assistantMessageCount} msgs`;
+    const time = relativeTime(session.lastActivityAt);
+    const cwd = session.cwd || "";
+    lines.push(truncateToWidth(" " + th.fg("dim", `${msgs} · ${time} · ${cwd}`), w));
+    lines.push(th.fg("border", " " + "─".repeat(Math.max(0, w - 2))));
 
-    const durStr = formatDuration(session.durationSeconds);
-    const msgCount = session.userMessageCount + session.assistantMessageCount;
-    lines.push(" " + th.fg("muted", `${durStr} · ${msgCount} msgs · ${formatBytes(session.fileSizeBytes)}`));
-
-    // CWD (truncated)
-    const cwdLine = " " + th.fg("dim", truncateToWidth(session.cwd, w - 2));
-    lines.push(cwdLine);
-    lines.push(" " + th.fg("border", "─".repeat(Math.max(1, w - 2))));
-
-    // ── Conversation text ──
+    // ── Conversation preview ──
+    const blocks = getMessageBlocks(session.id);
     const headerH = lines.length;
     const contentH = h - headerH;
-    if (contentH <= 0) return lines.slice(0, h);
 
-    const rawText = session.fullText || "(no content)";
-    const textLines: string[] = [];
-
-    for (const rawLine of rawText.split("\n")) {
-      if (rawLine.length <= w - 2) {
-        textLines.push(rawLine);
-      } else {
-        // Word-wrap long lines
-        let remaining = rawLine;
-        while (remaining.length > w - 2) {
-          // Try to break at space
-          let breakAt = remaining.lastIndexOf(" ", w - 2);
-          if (breakAt <= 0) breakAt = w - 2;
-          textLines.push(remaining.slice(0, breakAt));
-          remaining = remaining.slice(breakAt).trimStart();
-        }
-        if (remaining) textLines.push(remaining);
-      }
+    if (blocks.length === 0) {
+      const emptyLines = this.centeredMessage(th.fg("dim", "(no preview)"), w, contentH);
+      lines.push(...emptyLines);
+      return lines;
     }
 
-    // Clamp preview scroll
-    const maxScroll = Math.max(0, textLines.length - contentH);
-    if (this.previewScroll > maxScroll) this.previewScroll = maxScroll;
+    // Render message blocks with Markdown (same style as session-switch)
+    const allContentLines: string[] = [];
+    let lastRole: string | undefined;
 
-    const scrolled = textLines.slice(this.previewScroll, this.previewScroll + contentH);
+    for (const block of blocks) {
+      if (allContentLines.length > 0) allContentLines.push("");
+
+      if (block.role === "user") {
+        const pill = th.bold(th.inverse(th.fg("accent", " USER ")));
+        allContentLines.push(" " + pill);
+
+        // User message with background
+        const bgBlank = th.bg("userMessageBg", " ".repeat(w));
+        allContentLines.push(bgBlank);
+
+        const md = new Markdown(block.text, 1, 0, this.mdTheme, {
+          bgColor: (text: string) => th.bg("userMessageBg", text),
+          color: (text: string) => th.fg("userMessageText", text),
+        });
+        for (const line of md.render(w)) {
+          allContentLines.push(th.bg("userMessageBg", padTo(line, w)));
+        }
+        allContentLines.push(bgBlank);
+      } else {
+        if (lastRole !== "assistant") {
+          const pill = th.bold(th.inverse(th.fg("success", " AGENT ")));
+          allContentLines.push(" " + pill);
+        }
+
+        const md = new Markdown(block.text, 1, 0, this.mdTheme);
+        allContentLines.push(...md.render(w));
+      }
+
+      lastRole = block.role;
+    }
+
+    // Show from top
     for (let i = 0; i < contentH; i++) {
-      if (i < scrolled.length) {
-        lines.push(" " + truncateToWidth(scrolled[i], w - 2));
+      if (i < allContentLines.length) {
+        lines.push(truncateToWidth(allContentLines[i], w));
       } else {
         lines.push("");
       }
     }
 
-    // Preview scroll indicator
-    if (textLines.length > contentH && lines.length > 0) {
-      const pct = Math.round((this.previewScroll / Math.max(1, maxScroll)) * 100);
-      const indicator = th.fg("dim", ` ↕ ${pct}%`);
-      lines[lines.length - 1] = indicator;
-    }
+    return lines;
+  }
 
-    return lines.slice(0, h);
+  private centeredMessage(msg: string, w: number, h: number): string[] {
+    const mid = Math.floor(h / 2);
+    const vis = visibleWidth(msg);
+    const padLeft = Math.max(0, Math.floor((w - vis) / 2));
+    return Array.from({ length: h }, (_, i) => (i === mid ? " ".repeat(padLeft) + msg : ""));
   }
 
   invalidate(): void {}
-}
 
-function padRight(s: string, w: number): string {
-  return s.length >= w ? s.slice(0, w) : s + " ".repeat(w - s.length);
-}
-
-function padLeft(s: string, w: number): string {
-  return s.length >= w ? s : " ".repeat(w - s.length) + s;
-}
-
-function padToWidth(s: string, w: number): string {
-  const vis = visibleWidth(s);
-  if (vis >= w) return truncateToWidth(s, w);
-  return s + " ".repeat(w - vis);
+  dispose(): void {
+    previewCache.clear();
+  }
 }
