@@ -154,6 +154,7 @@ export default function (pi: ExtensionAPI) {
               sessions: initialSessions,
               theme,
               getTermRows: () => tui.terminal?.rows ?? 40,
+              getTermCols: () => tui.terminal?.cols ?? 120,
               requestRender: () => tui.requestRender(),
               onDone: done,
               onSearch: (query) => listArchived(query || undefined),

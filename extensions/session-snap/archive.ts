@@ -126,23 +126,47 @@ export function listArchived(searchQuery?: string): ArchivedSession[] {
   const db = getDb();
 
   if (searchQuery && searchQuery.trim()) {
-    // FTS5 search
-    const ftsQuery = searchQuery
-      .trim()
-      .split(/\s+/)
-      .map((w) => `"${w}"`)
-      .join(" OR ");
+    const trimmed = searchQuery.trim();
 
+    // Try FTS5 first with prefix matching (append * to last token for live search)
+    try {
+      const tokens = trimmed.split(/\s+/).filter(Boolean);
+      // Each token gets quoted, last one gets prefix wildcard for live search
+      const ftsTokens = tokens.map((w, i) => {
+        const escaped = w.replace(/"/g, '""');
+        return i === tokens.length - 1 ? `"${escaped}"*` : `"${escaped}"`;
+      });
+      const ftsQuery = ftsTokens.join(" AND ");
+
+      const rows = db
+        .prepare(
+          `
+        SELECT s.* FROM sessions s
+        INNER JOIN sessions_fts fts ON s.rowid = fts.rowid
+        WHERE sessions_fts MATCH ?
+        ORDER BY rank
+        LIMIT 200
+      `,
+        )
+        .all(ftsQuery) as any[];
+
+      if (rows.length > 0) return rows.map(rowToArchived);
+    } catch {
+      // FTS query syntax error — fall through to LIKE
+    }
+
+    // Fallback: LIKE search on key fields
+    const pattern = `%${trimmed}%`;
     const rows = db
       .prepare(
         `
-      SELECT s.* FROM sessions s
-      INNER JOIN sessions_fts fts ON s.rowid = fts.rowid
-      WHERE sessions_fts MATCH ?
-      ORDER BY s.last_activity_at DESC
+      SELECT * FROM sessions
+      WHERE first_message LIKE ? OR name LIKE ? OR cwd LIKE ? OR full_text LIKE ?
+      ORDER BY last_activity_at DESC
+      LIMIT 200
     `,
       )
-      .all(ftsQuery) as any[];
+      .all(pattern, pattern, pattern, pattern) as any[];
 
     return rows.map(rowToArchived);
   }
