@@ -20,7 +20,8 @@
       "./extensions/ask-user-question/index.ts",
       "./extensions/tool-pills/tool-pills.ts",
       "./extensions/cmux/index.ts",
-      "./extensions/session-snap/index.ts"
+      "./extensions/session-snap/index.ts",
+      "./extensions/prompt-history/index.ts"
     ],
     "skills": [
       "./skills/commit",
