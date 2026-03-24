@@ -1,112 +1,105 @@
 /**
- * prompt-history — Persistent input history across sessions
+ * prompt-history — Persistent input history across pi sessions
  *
- * Saves user prompts to ~/.pi/agent/prompt-history.jsonl so they
- * survive pi restarts. On session start, loads history into the
- * editor so ↑/↓ arrow navigation works immediately.
+ * Problem: pi's editor history lives only in memory. When you restart pi
+ * (without /resume), ↑/↓ arrow history is empty.
+ *
+ * Solution: save prompts to ~/.pi/agent/prompt-history.jsonl and pre-populate
+ * the editor on startup. Uses setEditorComponent with CustomEditor (the same
+ * class pi uses internally) — the only way to call addToHistory() on the editor.
+ *
+ * Startup order (verified in interactive-mode.js):
+ *   1. initExtensions() → session_start → we install editor with disk history
+ *   2. renderInitialMessages() → populateHistory → adds session history on top
+ * So both disk history (cross-session) and session history (current) coexist.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { CustomEditor } from "@mariozechner/pi-coding-agent";
-import { readFileSync, appendFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { writeFile, appendFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 const HISTORY_FILE = `${process.env.HOME}/.pi/agent/prompt-history.jsonl`;
 const MAX_HISTORY = 500;
 
-interface HistoryEntry {
-  text: string;
-  timestamp: number;
-}
-
-/** Load history from disk */
+/** Load prompt history from disk. Returns oldest-first. */
 function loadHistory(): string[] {
   try {
     if (!existsSync(HISTORY_FILE)) return [];
     const raw = readFileSync(HISTORY_FILE, "utf-8");
-    const entries: string[] = [];
+    const items: string[] = [];
     for (const line of raw.split("\n")) {
       if (!line.trim()) continue;
       try {
-        const entry = JSON.parse(line) as HistoryEntry;
-        if (entry.text?.trim()) {
-          entries.push(entry.text);
-        }
-      } catch {
-        // Skip malformed lines
+        const entry = JSON.parse(line);
+        if (entry.t?.trim()) items.push(entry.t);
+      } catch { /* skip */ }
+    }
+    // Deduplicate keeping last occurrence
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (let i = items.length - 1; i >= 0; i--) {
+      if (!seen.has(items[i])) {
+        seen.add(items[i]);
+        deduped.unshift(items[i]);
       }
     }
-    return entries;
+    return deduped.slice(-MAX_HISTORY);
   } catch {
     return [];
   }
 }
 
-/** Append a prompt to history file */
+/** Track entries written this session to know when to compact */
+let entriesWrittenThisSession = 0;
+
+/** Append a prompt to history file (async, fire-and-forget) */
 function savePrompt(text: string): void {
   const trimmed = text.trim();
   if (!trimmed) return;
+  // Skip slash commands
+  if (trimmed.startsWith("/")) return;
 
-  // Don't save slash commands (except /skill: which may contain useful context)
-  if (trimmed.startsWith("/") && !trimmed.startsWith("/skill:")) return;
+  mkdirSync(dirname(HISTORY_FILE), { recursive: true });
+  appendFile(HISTORY_FILE, JSON.stringify({ t: trimmed }) + "\n", "utf-8").catch(() => {});
 
-  const entry: HistoryEntry = { text: trimmed, timestamp: Date.now() };
-
-  try {
-    mkdirSync(dirname(HISTORY_FILE), { recursive: true });
-    appendFileSync(HISTORY_FILE, JSON.stringify(entry) + "\n", "utf-8");
-  } catch {
-    // Silently fail
-  }
-
-  // Compact if too large (keep last MAX_HISTORY entries)
-  try {
-    const all = loadHistory();
-    if (all.length > MAX_HISTORY * 1.5) {
-      const kept = all.slice(all.length - MAX_HISTORY);
-      const lines = kept.map((text) => JSON.stringify({ text, timestamp: 0 }));
-      writeFileSync(HISTORY_FILE, lines.join("\n") + "\n", "utf-8");
-    }
-  } catch {
-    // Silently fail
+  entriesWrittenThisSession++;
+  // Compact once per session if the file has grown a lot
+  if (entriesWrittenThisSession === 100) {
+    compactHistory();
   }
 }
 
-/** Deduplicate while preserving order (last occurrence wins) */
-function dedup(items: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  // Walk backwards so last occurrence is kept
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (!seen.has(items[i])) {
-      seen.add(items[i]);
-      result.unshift(items[i]);
-    }
-  }
-  return result;
+/** Rewrite history file keeping only last MAX_HISTORY unique entries */
+function compactHistory(): void {
+  const items = loadHistory(); // already deduped and sliced
+  const lines = items.map((t) => JSON.stringify({ t }));
+  writeFile(HISTORY_FILE, lines.join("\n") + "\n", "utf-8").catch(() => {});
 }
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     if (!ctx.hasUI) return;
 
-    // Load persisted history
-    const diskHistory = dedup(loadHistory());
+    const diskHistory = loadHistory();
+    if (diskHistory.length === 0) return; // Nothing to inject, keep default editor
 
-    // Install custom editor that includes persisted history
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       const editor = new CustomEditor(tui, theme, keybindings);
 
-      // Populate editor history from disk (oldest first, so most recent is at top)
+      // Populate: oldest first so most recent ends up at ↑ position 0
       for (const text of diskHistory) {
         editor.addToHistory(text);
       }
 
+      // After this, pi calls renderInitialMessages() which adds
+      // current session's history on top via the same addToHistory()
       return editor;
     });
   });
 
-  // Save prompts on submission via input event
+  // Capture user prompts
   pi.on("input", async (event) => {
     if (event.text?.trim()) {
       savePrompt(event.text);
