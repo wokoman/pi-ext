@@ -9,9 +9,11 @@
  * Exported for use by the leader-key extension.
  */
 
-import type { ExtensionAPI, ExtensionContext, ThinkingLevel } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { SettingsManager } from "@mariozechner/pi-coding-agent";
-import { fuzzyFilter, Key, matchesKey, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { fuzzyFilter, Key, matchesKey } from "@mariozechner/pi-tui";
+import { OverlayFrame } from "../shared/overlay.js";
 
 export const ALL_THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -101,19 +103,16 @@ export async function searchableSelect<T extends string>(
 	title: string,
 	items: SearchableItem[],
 	helpText?: string,
+	defaultValue?: string,
 ): Promise<T | null> {
+	const defaultIndex = defaultValue ? items.findIndex((i) => i.value === defaultValue) : -1;
 	return ctx.ui.custom<T | null>((tui, theme, _kb, done) => {
 		let searchText = "";
 		let filteredItems = [...items];
-		let highlightedIndex = 0;
+		let highlightedIndex = defaultIndex >= 0 ? defaultIndex : 0;
 		let scrollOffset = 0;
 
 		const th = theme;
-
-		const pad = (s: string, len: number) => {
-			const vis = visibleWidth(s);
-			return s + " ".repeat(Math.max(0, len - vis));
-		};
 
 		const applyFilter = () => {
 			if (searchText === "") {
@@ -135,34 +134,30 @@ export async function searchableSelect<T extends string>(
 
 		return {
 			render: (width: number) => {
+				const f = new OverlayFrame(width, th);
 				const lines: string[] = [];
-				const maxW = Math.min(width, 80);
-
-				const hLine = "─".repeat(maxW - 2);
-				const row = (content: string) =>
-					th.fg("border", "│") + " " + pad(content, maxW - 4) + " " + th.fg("border", "│");
 
 				// Header
-				lines.push(th.fg("border", `╭${hLine}╮`));
-				lines.push(row(th.fg("accent", th.bold(title))));
+				lines.push(f.top());
+				lines.push(f.row(th.fg("accent", th.bold(title))));
 
 				// Search indicator
 				if (searchText.length > 0) {
-					lines.push(row(
+					lines.push(f.row(
 						th.fg("muted", "search: ") + th.fg("accent", searchText) + th.fg("dim", "▏"),
 					));
 				}
 
-				lines.push(th.fg("border", `├${hLine}┤`));
+				lines.push(f.separator());
 
 				// Items
 				if (filteredItems.length === 0) {
-					lines.push(row(th.fg("warning", "  no matches")));
+					lines.push(f.row(th.fg("warning", "  no matches")));
 				} else {
 					const visibleEnd = Math.min(scrollOffset + MAX_VISIBLE, filteredItems.length);
 
 					if (scrollOffset > 0) {
-						lines.push(row(th.fg("dim", `  ↑ ${scrollOffset} more`)));
+						lines.push(f.row(th.fg("dim", `  ↑ ${scrollOffset} more`)));
 					}
 
 					for (let i = scrollOffset; i < visibleEnd; i++) {
@@ -179,20 +174,20 @@ export async function searchableSelect<T extends string>(
 							line += "  " + th.fg("dim", item.description);
 						}
 
-						lines.push(row(truncateToWidth(line, maxW - 4)));
+						lines.push(f.rowTruncated(line));
 					}
 
 					const remaining = filteredItems.length - visibleEnd;
 					if (remaining > 0) {
-						lines.push(row(th.fg("dim", `  ↓ ${remaining} more`)));
+						lines.push(f.row(th.fg("dim", `  ↓ ${remaining} more`)));
 					}
 				}
 
 				// Footer
-				lines.push(th.fg("border", `├${hLine}┤`));
+				lines.push(f.separator());
 				const hint = helpText ?? "type to search • ↑↓ navigate • enter select • esc cancel";
-				lines.push(row(th.fg("dim", hint)));
-				lines.push(th.fg("border", `╰${hLine}╯`));
+				lines.push(f.row(th.fg("dim", hint)));
+				lines.push(f.bottom());
 
 				return lines;
 			},
@@ -251,6 +246,7 @@ export async function searchableSelect<T extends string>(
 			anchor: "center",
 			width: 80,
 			minWidth: 50,
+			maxHeight: "80%",
 		},
 	});
 }

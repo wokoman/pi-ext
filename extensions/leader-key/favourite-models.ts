@@ -12,11 +12,13 @@
  *   - thinking:  (optional) thinking level to set after switching
  */
 
-import type { ExtensionAPI, ExtensionContext, ThinkingLevel } from "@mariozechner/pi-coding-agent";
-import { matchesKey, parseKey, visibleWidth, truncateToWidth, Key } from "@mariozechner/pi-tui";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { matchesKey, parseKey, Key } from "@mariozechner/pi-tui";
+import { OverlayFrame } from "../shared/overlay.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { ALL_THINKING_LEVELS } from "./model-switcher";
+import { ALL_THINKING_LEVELS, searchableSelect, getThinkingDescription } from "./model-switcher";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config types
@@ -81,24 +83,15 @@ export async function runFavouriteModels(pi: ExtensionAPI, ctx: ExtensionContext
 			let highlightedIndex = 0;
 			const th = theme;
 
-			const pad = (s: string, len: number) => {
-				const vis = visibleWidth(s);
-				return s + " ".repeat(Math.max(0, len - vis));
-			};
-
 			return {
 				render: (width: number) => {
+					const f = new OverlayFrame(width, th);
 					const lines: string[] = [];
-					const maxW = Math.min(width, 80);
-
-					const hLine = "─".repeat(maxW - 2);
-					const row = (content: string) =>
-						th.fg("border", "│") + " " + pad(content, maxW - 4) + " " + th.fg("border", "│");
 
 					// Header
-					lines.push(th.fg("border", `╭${hLine}╮`));
-					lines.push(row(th.fg("accent", th.bold("Favourite Models"))));
-					lines.push(th.fg("border", `├${hLine}┤`));
+					lines.push(f.top());
+					lines.push(f.row(th.fg("accent", th.bold("Favourite Models"))));
+					lines.push(f.separator());
 
 					// Items
 					for (let i = 0; i < favourites.length; i++) {
@@ -124,13 +117,13 @@ export async function runFavouriteModels(pi: ExtensionAPI, ctx: ExtensionContext
 						}
 
 						let line = `${isHighlighted ? "> " : "  "}${keyBadge} ${label}${currentBadge}  ${desc}`;
-						lines.push(row(truncateToWidth(line, maxW - 4)));
+						lines.push(f.rowTruncated(line));
 					}
 
 					// Footer
-					lines.push(th.fg("border", `├${hLine}┤`));
-					lines.push(row(th.fg("dim", "press key to switch | ↑↓ navigate | enter select | esc cancel")));
-					lines.push(th.fg("border", `╰${hLine}╯`));
+					lines.push(f.separator());
+					lines.push(f.row(th.fg("dim", "press key to switch | ↑↓ navigate | enter select | esc cancel")));
+					lines.push(f.bottom());
 
 					return lines;
 				},
@@ -189,30 +182,59 @@ export async function runFavouriteModels(pi: ExtensionAPI, ctx: ExtensionContext
 				anchor: "center",
 				width: 80,
 				minWidth: 50,
+				maxHeight: "80%",
 			},
 		},
 	);
 
 	if (!selected) return;
 
-	// ── Apply the selected model ──────────────────────────────────────────
+	// ── Validate model before showing thinking picker ─────────────────────
 	const modelInfo = ctx.modelRegistry.find(selected.provider, selected.model);
 	if (!modelInfo) {
 		ctx.ui.notify(`Model ${selected.provider}/${selected.model} not found in registry`, "error");
 		return;
 	}
 
+	// ── Step 2: Pick thinking level (before applying model → no delay) ──
+	const supportsReasoning = modelInfo.reasoning;
+	let selectedThinking: ThinkingLevel = pi.getThinkingLevel();
+
+	if (supportsReasoning) {
+		const defaultThinking = selected.thinking && ALL_THINKING_LEVELS.includes(selected.thinking as ThinkingLevel)
+			? (selected.thinking as ThinkingLevel)
+			: pi.getThinkingLevel();
+
+		const thinkingItems = ALL_THINKING_LEVELS.map((level) => ({
+			value: level,
+			label: level === defaultThinking ? `${level} (default)` : level,
+			description: getThinkingDescription(level),
+		}));
+
+		const thinkingChoice = await searchableSelect<ThinkingLevel>(
+			ctx,
+			`Thinking Level (${selected.label})`,
+			thinkingItems,
+			undefined,
+			defaultThinking,
+		);
+
+		if (!thinkingChoice) return;
+		selectedThinking = thinkingChoice;
+	} else {
+		selectedThinking = "off";
+	}
+
+	// ── Apply model + thinking together ───────────────────────────────────
 	const ok = await pi.setModel(modelInfo);
 	if (!ok) {
 		ctx.ui.notify(`No API key available for ${selected.provider}/${selected.model}`, "warning");
 		return;
 	}
+	pi.setThinkingLevel(selectedThinking);
 
-	// Apply thinking level if specified
-	if (selected.thinking && ALL_THINKING_LEVELS.includes(selected.thinking as ThinkingLevel)) {
-		pi.setThinkingLevel(selected.thinking as ThinkingLevel);
-	}
-
-	const thinkingLabel = selected.thinking ? ` (thinking: ${selected.thinking})` : "";
-	ctx.ui.notify(`Switched to ${selected.label}${thinkingLabel}`, "info");
+	ctx.ui.notify(
+		`Switched to ${selected.label}${supportsReasoning ? ` (thinking: ${selectedThinking})` : ""}`,
+		"info",
+	);
 }

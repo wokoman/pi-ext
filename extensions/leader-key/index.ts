@@ -20,13 +20,15 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	Theme,
-	ThinkingLevel,
 } from "@mariozechner/pi-coding-agent";
-import { matchesKey, parseKey, visibleWidth, truncateToWidth, Key } from "@mariozechner/pi-tui";
-import { spawnSync } from "node:child_process";
+import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
+import { matchesKey, parseKey, Key } from "@mariozechner/pi-tui";
 import { runModelSwitcher, runThinkingPicker, searchableSelect } from "./model-switcher";
 import { runFavouriteModels } from "./favourite-models";
 import { runSessionSwitch } from "../session-switch/index";
+import { OverlayFrame } from "../shared/overlay.js";
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -55,57 +57,7 @@ type TopLevelEntry =
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// External app launchers
-// ─────────────────────────────────────────────────────────────────────────────
 
-async function runExternalApp(ctx: ExtensionContext, command: string, label: string) {
-	if (!ctx.hasUI) {
-		ctx.ui.notify(`${label} requires an interactive terminal`, "error");
-		return;
-	}
-
-	await ctx.ui.custom<number | null>((tui, _theme, _kb, done) => {
-		// Suspend pi's TUI to release the terminal
-		tui.stop();
-
-		// Clear screen before handing off
-		process.stdout.write("\x1b[2J\x1b[H");
-
-		// Run the command with full terminal access
-		const shell = process.env.SHELL || "/bin/sh";
-		const result = spawnSync(shell, ["-c", command], {
-			stdio: "inherit",
-			cwd: ctx.cwd,
-			env: process.env,
-		});
-
-		// Restore pi's TUI
-		tui.start();
-		tui.requestRender(true);
-
-		done(result.status);
-
-		// Return empty component (immediately disposed)
-		return { render: () => [], invalidate: () => {} };
-	});
-}
-
-async function runLazygit(ctx: ExtensionContext) {
-	await runExternalApp(ctx, "lazygit", "lazygit");
-}
-
-async function runLazyvim(ctx: ExtensionContext) {
-	await runExternalApp(ctx, "nvim", "lazyvim");
-}
-
-async function runVscode(ctx: ExtensionContext) {
-	spawnSync(process.env.SHELL || "/bin/sh", ["-c", "code ."], {
-		stdio: "inherit",
-		cwd: ctx.cwd,
-		env: process.env,
-	});
-	ctx.ui.notify("Opening VS Code…", "info");
-}
 
 function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] {
 	const entries: TopLevelEntry[] = [];
@@ -160,6 +112,15 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 					},
 				},
 				{
+					key: "p",
+					label: "Split-fork",
+					description: "fork into cmux split pane",
+					action: (ctx) => {
+						ctx.ui.setEditorText("/split-fork");
+						setTimeout(() => process.stdin.emit("data", "\r"), 0);
+					},
+				},
+				{
 					key: "c",
 					label: "Compact context",
 					description: "compact now",
@@ -201,35 +162,37 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		action: (ctx) => runThinkingPicker(pi, ctx),
 	});
 
-	// ── Git: lazygit (direct action) ────────────────────────────────────
+	// ── Permissions mode (direct action → overlay picker) ───────────────
 	entries.push({
 		type: "action",
-		key: "g",
-		label: "Lazygit",
-		description: "open lazygit in current folder",
-		action: (ctx) => runLazygit(ctx),
-	});
+		key: "p",
+		label: "Permissions",
+		description: "switch permission mode",
+		action: async (ctx) => {
+			const ALL_MODES = ["yolo", "safe", "plan", "read-only"] as const;
+			const MODE_DESCRIPTIONS: Record<string, string> = {
+				yolo: "all commands allowed, no checks",
+				safe: "permission rules active",
+				plan: "plannotator planning mode",
+				"read-only": "read-only, no writes allowed",
+			};
 
-	// ── Open (external editors / apps) ───────────────────────────────────
-	entries.push({
-		type: "group",
-		group: {
-			key: "o",
-			label: "Open",
-			items: [
-				{
-					key: "v",
-					label: "LazyVim",
-					description: "open lazyvim in current folder",
-					action: (ctx) => runLazyvim(ctx),
-				},
-				{
-					key: "c",
-					label: "VS Code",
-					description: "open vscode in current folder",
-					action: (ctx) => runVscode(ctx),
-				},
-			],
+			const items = ALL_MODES.map((m) => ({
+				value: m,
+				label: m,
+				description: MODE_DESCRIPTIONS[m],
+			}));
+
+			const selected = await searchableSelect<string>(
+				ctx,
+				"Select Permission Mode",
+				items,
+			);
+
+			if (selected) {
+				ctx.ui.setEditorText(`/mode ${selected}`);
+				setTimeout(() => process.stdin.emit("data", "\r"), 0);
+			}
 		},
 	});
 
@@ -242,6 +205,7 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		"new", "resume", "tree", "fork", "compact",
 		"model", "thinking", "tools", "reload",
 		"switch", "lk", "leader-key",
+		"mode", "permissions",
 	]);
 
 	const customCommands = extCommands.filter((c) => !builtinCommandNames.has(c.name));
@@ -305,7 +269,29 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 	// ── Exit ─────────────────────────────────────────────────────────────
 	entries.push({
 		type: "action",
-		key: "x",
+		key: "r",
+		label: "Review",
+		description: "code review UI",
+		action: (ctx) => {
+			ctx.ui.setEditorText("/plannotator-review");
+			setTimeout(() => process.stdin.emit("data", "\r"), 0);
+		},
+	});
+
+	entries.push({
+		type: "action",
+		key: "a",
+		label: "Annotate last",
+		description: "annotate last assistant message",
+		action: (ctx) => {
+			ctx.ui.setEditorText("/plannotator-last");
+			setTimeout(() => process.stdin.emit("data", "\r"), 0);
+		},
+	});
+
+	entries.push({
+		type: "action",
+		key: "q",
 		label: "Exit",
 		description: "quit pi",
 		action: (ctx) => {
@@ -460,35 +446,26 @@ class LeaderKeyOverlay {
 
 	render(width: number): string[] {
 		const th = this.theme;
+		const f = new OverlayFrame(width, th);
 		const lines: string[] = [];
-		const maxW = Math.min(width, 80);
-
-		const pad = (s: string, len: number) => {
-			const vis = visibleWidth(s);
-			return s + " ".repeat(Math.max(0, len - vis));
-		};
-
-		const hLine = "─".repeat(maxW - 2);
-		const row = (content: string) =>
-			th.fg("border", "│") + " " + pad(content, maxW - 4) + " " + th.fg("border", "│");
 
 		// Header
-		lines.push(th.fg("border", `╭${hLine}╮`));
+		lines.push(f.top());
 
 		if (this.view.type === "root") {
-			lines.push(row(th.fg("accent", th.bold("Leader Key"))));
+			lines.push(f.row(th.fg("accent", th.bold("Leader Key"))));
 		} else {
 			const g = this.view.group;
 			const breadcrumb = th.fg("dim", "< ") + th.fg("accent", th.bold(g.label));
-			lines.push(row(breadcrumb));
+			lines.push(f.row(breadcrumb));
 		}
 
-		lines.push(th.fg("border", `├${hLine}┤`));
+		lines.push(f.separator());
 
 		// Items
 		const items = this.currentItems;
 		if (items.length === 0) {
-			lines.push(row(th.fg("muted", "  (no items)")));
+			lines.push(f.row(th.fg("muted", "  (no items)")));
 		} else {
 			for (let i = 0; i < items.length; i++) {
 				const item = items[i];
@@ -517,24 +494,20 @@ class LeaderKeyOverlay {
 					line += "  " + th.fg("dim", item.description);
 				}
 
-				lines.push(row(truncateToWidth(line, maxW - 4)));
+				lines.push(f.rowTruncated(line));
 			}
 		}
 
 		// Footer
-		lines.push(th.fg("border", `├${hLine}┤`));
+		lines.push(f.separator());
 
 		if (this.view.type === "root") {
-			lines.push(
-				row(th.fg("dim", "press key to select | esc close")),
-			);
+			lines.push(f.row(th.fg("dim", "press key to select | esc close")));
 		} else {
-			lines.push(
-				row(th.fg("dim", "press key to run | bksp back | esc close")),
-			);
+			lines.push(f.row(th.fg("dim", "press key to run | bksp back | esc close")));
 		}
 
-		lines.push(th.fg("border", `╰${hLine}╯`));
+		lines.push(f.bottom());
 
 		return lines;
 	}
@@ -570,6 +543,7 @@ export default function leaderKeyExtension(pi: ExtensionAPI) {
 					anchor: "center",
 					width: 80,
 					minWidth: 50,
+					maxHeight: "80%",
 				},
 			},
 		);

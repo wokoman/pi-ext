@@ -655,9 +655,7 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				noMatch: (text) => theme.fg("warning", text),
 			});
 
-			// Enable search
-			selectList.searchable = true;
-
+			let searchQuery = "";
 			selectList.onSelect = (item) => done(item.value);
 			selectList.onCancel = () => done(null);
 
@@ -673,7 +671,16 @@ export default function reviewExtension(pi: ExtensionAPI) {
 					container.invalidate();
 				},
 				handleInput(data: string) {
-					selectList.handleInput(data);
+					// Handle search filtering
+					if (data.length === 1 && data >= ' ') {
+						searchQuery += data;
+						selectList.setFilter(searchQuery);
+					} else if (data === '\x7f' || data === '\b') {
+						searchQuery = searchQuery.slice(0, -1);
+						selectList.setFilter(searchQuery);
+					} else {
+						selectList.handleInput(data);
+					}
 					tui.requestRender();
 				},
 			};
@@ -713,9 +720,7 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				noMatch: (text) => theme.fg("warning", text),
 			});
 
-			// Enable search
-			selectList.searchable = true;
-
+			let searchQuery = "";
 			selectList.onSelect = (item) => {
 				const commit = commits.find((c) => c.sha === item.value);
 				if (commit) {
@@ -738,7 +743,16 @@ export default function reviewExtension(pi: ExtensionAPI) {
 					container.invalidate();
 				},
 				handleInput(data: string) {
-					selectList.handleInput(data);
+					// Handle search filtering
+					if (data.length === 1 && data >= ' ') {
+						searchQuery += data;
+						selectList.setFilter(searchQuery);
+					} else if (data === '\x7f' || data === '\b') {
+						searchQuery = searchQuery.slice(0, -1);
+						selectList.setFilter(searchQuery);
+					} else {
+						selectList.handleInput(data);
+					}
 					tui.requestRender();
 				},
 			};

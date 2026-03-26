@@ -1,7 +1,11 @@
 {
   "name": "pi-ext",
   "version": "0.1.0",
-  "private": true,
+  "dependencies": {
+    "@mariozechner/pi-ai": "^0.62.0",
+    "@mariozechner/pi-coding-agent": "^0.62.0",
+    "@mariozechner/pi-tui": "^0.62.0"
+  },
   "description": "Personal collection of Pi extensions, themes, and skills.",
   "keywords": [
     "pi-package",
@@ -21,7 +25,8 @@
       "./extensions/tool-pills/tool-pills.ts",
       "./extensions/cmux/index.ts",
       "./extensions/session-snap/index.ts",
-      "./extensions/prompt-history/index.ts"
+      "./extensions/pi-telescope/index.ts",
+      "./extensions/piff/index.ts"
     ],
     "skills": [
       "./skills/commit",
@@ -34,9 +39,5 @@
       "./themes"
     ]
   },
-  "dependencies": {
-    "@mariozechner/pi-ai": "^0.62.0",
-    "@mariozechner/pi-coding-agent": "^0.62.0",
-    "@mariozechner/pi-tui": "^0.62.0"
-  }
+  "private": true
 }
