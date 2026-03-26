@@ -1,20 +1,15 @@
 import { createServer, type ServerResponse } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getRepoName, getCurrentBranch } from "./git.js";
 import { DiffSession } from "./diff-session.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function loadPageHTML(): string {
-  // Try built Svelte app first, fall back to legacy page.html
-  const distPath = join(__dirname, "dist", "index.html");
-  if (existsSync(distPath)) return readFileSync(distPath, "utf-8");
-  return readFileSync(join(__dirname, "page.html"), "utf-8");
-}
+const PAGE_HTML = readFileSync(join(__dirname, "dist", "index.html"), "utf-8");
+const PAGE_HTML_BUF = Buffer.from(PAGE_HTML, "utf-8");
+const PAGE_ETAG = `"${Bun.hash(PAGE_HTML).toString(36)}"`;
 
-const PAGE_HTML = loadPageHTML();
 
 export interface ServerOptions {
   port: number;
@@ -37,9 +32,20 @@ export function stopServer() {
   }
 }
 
-export function startServer(opts: ServerOptions): Promise<number> {
+async function killPort(port: number) {
+  try {
+    const proc = Bun.spawn(["lsof", "-ti:" + port], { stdout: "pipe", stderr: "ignore" });
+    const text = await new Response(proc.stdout).text();
+    for (const pid of text.trim().split("\n").filter(Boolean)) {
+      try { process.kill(+pid, "SIGKILL"); } catch {}
+    }
+  } catch {}
+}
+
+export async function startServer(opts: ServerOptions): Promise<number> {
   const { port, diffArgs, description, cwd } = opts;
   stopServer();
+  await killPort(port);
 
   const session = new DiffSession(diffArgs, cwd);
   activeSession = session;
@@ -72,8 +78,8 @@ export function startServer(opts: ServerOptions): Promise<number> {
         if (p === "/api/info") {
           const files = session.getFiles();
           json(res, {
-            name: getRepoName(cwd),
-            branch: getCurrentBranch(cwd),
+            name: session.repoName,
+            branch: session.branch,
             description,
             fileCount: files.length,
             cached: session.cachedCount,
@@ -145,7 +151,7 @@ export function startServer(opts: ServerOptions): Promise<number> {
 
         if (p.startsWith("/api/diff/")) {
           const filePath = decodeURIComponent(p.slice(10));
-          const file = session.getFiles().find((f) => f.path === filePath);
+          const file = session.getFileByPath(filePath);
           if (!file) {
             error(res, 404, "Not found");
             return;
@@ -159,13 +165,22 @@ export function startServer(opts: ServerOptions): Promise<number> {
           return;
         }
 
-        // Serve the SPA
+        // Serve the SPA with ETag caching
+        if (req.headers["if-none-match"] === PAGE_ETAG) {
+          res.writeHead(304);
+          res.end();
+          return;
+        }
         res.writeHead(200, {
           "Content-Type": "text/html; charset=utf-8",
+          "ETag": PAGE_ETAG,
+          "Cache-Control": "no-cache",
         });
-        res.end(PAGE_HTML);
+        res.end(PAGE_HTML_BUF);
       } catch (e) {
-        error(res, 500, String(e));
+        if (!res.headersSent) {
+          error(res, 500, String(e));
+        }
       }
     });
 

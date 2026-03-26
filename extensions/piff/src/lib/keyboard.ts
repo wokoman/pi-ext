@@ -1,5 +1,5 @@
 /**
- * Keyboard handler – dispatches actions based on key presses.
+ * Keyboard handler - dispatches actions based on key presses.
  * Returns an action descriptor so the caller (App.svelte) can handle side effects.
  */
 
@@ -47,7 +47,6 @@ export function handleKeydown(e: KeyboardEvent): Action {
     return { type: "toggleHelp" }; // App will check if help is visible
   }
 
-  // Ctrl combos
   if (e.ctrlKey) {
     switch (e.key) {
       case "d": e.preventDefault(); return { type: "scrollHalfDown" };

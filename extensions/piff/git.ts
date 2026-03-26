@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,7 +16,7 @@ export interface ChangedFile {
 }
 
 function git(args: string[], cwd: string): string {
-  return execSync(`git ${args.join(" ")}`, {
+  return execFileSync("git", args, {
     cwd, encoding: "utf8", maxBuffer: MAX_BUF, stdio: ["pipe", "pipe", "pipe"],
   }).trim();
 }
@@ -121,8 +121,9 @@ export function getChangedFiles(diffArgs: string[], cwd: string): ChangedFile[] 
       seen.add(p);
       let lines = 0;
       try {
-        const wc = execSync(`wc -l < '${p.replace(/'/g, "'\\''")}'`, { cwd, encoding: "utf8" }).trim();
-        lines = parseInt(wc, 10) || 0;
+        const content = readFileSync(join(cwd, p), "utf-8");
+        lines = content.split("\n").length;
+        if (content.endsWith("\n")) lines--;
       } catch {}
       files.push({ path: p, status: "added", untracked: true, additions: lines, deletions: 0 });
     }
@@ -151,9 +152,7 @@ export function getChangedFiles(diffArgs: string[], cwd: string): ChangedFile[] 
 
 export function getFileAtRef(ref: string, filePath: string, cwd: string): string | null {
   try {
-    const safeRef = ref.replace(/'/g, "'\\''");
-    const safePath = filePath.replace(/'/g, "'\\''");
-    return execSync(`git show '${safeRef}:${safePath}'`, {
+    return execFileSync("git", ["show", `${ref}:${filePath}`], {
       cwd, encoding: "utf8", maxBuffer: MAX_BUF,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -210,8 +209,11 @@ export function contentHash(
   oldContent: string | null,
   newContent: string | null,
 ): string {
-  const combined = (oldContent ?? "\0NULL\0") + "\0" + (newContent ?? "\0NULL\0");
-  return Bun.hash(combined).toString(36);
+  // Hash each part separately to avoid concatenating large strings.
+  // Mix h1 into h2's seed so collisions require both parts to collide simultaneously.
+  const h1 = Bun.hash(oldContent ?? "\0NULL\0");
+  const h2 = Bun.hash(newContent ?? "\0NULL\0", Number(h1 & 0xFFFFFFFFn));
+  return h1.toString(36) + "_" + h2.toString(36);
 }
 
 /**
@@ -237,6 +239,7 @@ export function bulkGetFilesAtRef(
 
     const results = new Map<string, string | null>();
     let buf = Buffer.alloc(0);
+    let bufOffset = 0; // track consumed bytes to avoid repeated subarray
     let pendingIdx = 0;
 
     // Each response from cat-file --batch is:
@@ -245,15 +248,15 @@ export function bulkGetFilesAtRef(
     const processBuffer = () => {
       while (pendingIdx < paths.length) {
         // Need at least one line (header)
-        const nlIdx = buf.indexOf(10); // \n
+        const nlIdx = buf.indexOf(10, bufOffset); // \n
         if (nlIdx === -1) break;
 
-        const headerLine = buf.subarray(0, nlIdx).toString("utf8");
+        const headerLine = buf.subarray(bufOffset, nlIdx).toString("utf8");
         const query = `${ref}:${paths[pendingIdx]}`;
 
         if (headerLine.endsWith(" missing")) {
           results.set(query, null);
-          buf = buf.subarray(nlIdx + 1);
+          bufOffset = nlIdx + 1;
           pendingIdx++;
           continue;
         }
@@ -263,7 +266,7 @@ export function bulkGetFilesAtRef(
         if (!sizeMatch) {
           // Unexpected format, skip
           results.set(query, null);
-          buf = buf.subarray(nlIdx + 1);
+          bufOffset = nlIdx + 1;
           pendingIdx++;
           continue;
         }
@@ -275,13 +278,21 @@ export function bulkGetFilesAtRef(
         if (buf.length < contentEnd + 1) break;
 
         results.set(query, buf.subarray(contentStart, contentEnd).toString("utf8"));
-        buf = buf.subarray(contentEnd + 1);
+        bufOffset = contentEnd + 1;
         pendingIdx++;
+      }
+      // Compact buffer when we've consumed a lot
+      if (bufOffset > 65536) {
+        buf = buf.subarray(bufOffset);
+        bufOffset = 0;
       }
     };
 
     proc.stdout.on("data", (chunk: Buffer) => {
-      buf = Buffer.concat([buf, chunk]);
+      buf = bufOffset > 0
+        ? Buffer.concat([buf.subarray(bufOffset), chunk])
+        : Buffer.concat([buf, chunk]);
+      bufOffset = 0;
       processBuffer();
     });
 

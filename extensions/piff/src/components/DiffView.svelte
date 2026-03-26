@@ -7,10 +7,14 @@
   let diffOutEl: HTMLDivElement;
 
   let loading = $state(false);
+  let showSpinner = $state(false);
+  let spinnerTimer: ReturnType<typeof setTimeout> | null = null;
   let errorMsg = $state<string | null>(null);
   let currentHtml = $state<string | null>(null);
 
-  // Client-side LRU cache: (path + options) → html
+  // Client-side LRU cache: (path + ignoreWhitespace) → html
+  // diffStyle/expandUnchanged are baked into the server-rendered HTML,
+  // so they must be part of the key too.
   const CLIENT_CACHE_MAX = 100;
   let clientCache = new Map<string, string>();
 
@@ -22,7 +26,6 @@
     const key = cacheKey(path, $renderOptions);
     const val = clientCache.get(key);
     if (val === undefined) return undefined;
-    // Move to end (most recently used)
     clientCache.delete(key);
     clientCache.set(key, val);
     return val;
@@ -32,11 +35,15 @@
     const key = cacheKey(path, $renderOptions);
     if (clientCache.has(key)) clientCache.delete(key);
     clientCache.set(key, html);
-    // Evict oldest entries over limit
     while (clientCache.size > CLIENT_CACHE_MAX) {
       const first = clientCache.keys().next().value!;
       clientCache.delete(first);
     }
+  }
+
+  /** Clear all cached entries (used on refresh when file contents may have changed). */
+  export function clearCache() {
+    clientCache.clear();
   }
 
   let abortController: AbortController | null = null;
@@ -44,21 +51,13 @@
   let retried = false;
 
   // Hunk navigation state
-  interface Hunk {
-    y: number;
-    height: number;
-  }
+  interface Hunk { y: number; height: number; }
   let hunkCache: Hunk[] | null = null;
   let hunkIdx = -1;
   let hunkMarkerY = $state(0);
   let hunkBadgeText = $state("");
   let hunkVisible = $state(false);
   let hunkFadeTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Clear all cached entries (used on refresh when file contents may have changed). */
-  export function clearCache() {
-    clientCache.clear();
-  }
 
   export function scrollTo(position: "top" | "bottom") {
     if (!diffViewEl) return;
@@ -144,40 +143,79 @@
     hunkBadgeText = `${idx + 1} / ${total}`;
     hunkVisible = true;
     if (hunkFadeTimer) clearTimeout(hunkFadeTimer);
-    hunkFadeTimer = setTimeout(() => {
-      hunkVisible = false;
-    }, 2000);
+    hunkFadeTimer = setTimeout(() => { hunkVisible = false; }, 2000);
   }
 
   function renderHtml(html: string) {
     resetHunks();
+    clearSpinnerTimer();
+    showSpinner = false;
+
     const wrapper = document.createElement("div");
     wrapper.style.colorScheme = "dark";
     const shadow = wrapper.attachShadow({ mode: "open" });
     shadow.innerHTML = html;
+
+    // Snap transition: instantly swap content with a quick fade-in
+    diffOutEl.style.opacity = "0";
     diffOutEl.innerHTML = "";
     diffOutEl.appendChild(wrapper);
-    diffOutEl.classList.remove("fade-in");
-    void diffOutEl.offsetWidth;
-    diffOutEl.classList.add("fade-in");
     diffViewEl.scrollTop = 0;
+
+    // Force reflow, then snap to visible
+    void diffOutEl.offsetWidth;
+    diffOutEl.style.transition = "opacity 80ms ease-out";
+    diffOutEl.style.opacity = "1";
+
+    // Clean up inline styles after transition
+    const cleanup = () => {
+      diffOutEl.style.transition = "";
+      diffOutEl.style.opacity = "";
+      diffOutEl.removeEventListener("transitionend", cleanup);
+    };
+    diffOutEl.addEventListener("transitionend", cleanup);
+  }
+
+  function clearSpinnerTimer() {
+    if (spinnerTimer) {
+      clearTimeout(spinnerTimer);
+      spinnerTimer = null;
+    }
   }
 
   async function loadDiff(path: string) {
-    // Check client cache first (keyed by path + current render options)
     const cached = cacheGet(path);
     if (cached) {
       currentHtml = path;
       loading = false;
+      showSpinner = false;
+      clearSpinnerTimer();
       errorMsg = null;
       renderHtml(cached);
       return;
     }
 
+    // Keep old content visible — don't clear currentHtml yet
+    // Only dim old content slightly to hint at loading
     resetHunks();
     loading = true;
     errorMsg = null;
-    currentHtml = null;
+    clearSpinnerTimer();
+    showSpinner = false;
+
+    // Dim old content to signal loading without removing it
+    if (currentHtml && diffOutEl) {
+      diffOutEl.style.transition = "opacity 100ms ease-out";
+      diffOutEl.style.opacity = "0.4";
+    }
+
+    // Show spinner only if loading takes > 200ms
+    spinnerTimer = setTimeout(() => {
+      if (loading) {
+        showSpinner = true;
+        currentHtml = null;
+      }
+    }, 200);
 
     if (abortController) abortController.abort();
     const abort = new AbortController();
@@ -193,6 +231,9 @@
         renderHtml(data.html);
       } else {
         loading = false;
+        showSpinner = false;
+        clearSpinnerTimer();
+        currentHtml = null;
         errorMsg = "No changes";
       }
     } catch (e: any) {
@@ -208,6 +249,9 @@
       }
       retried = false;
       loading = false;
+      showSpinner = false;
+      clearSpinnerTimer();
+      currentHtml = null;
       errorMsg = e.message;
     }
   }
@@ -217,17 +261,25 @@
     const path = $selectedPath;
     if (!path) {
       loading = false;
+      showSpinner = false;
+      clearSpinnerTimer();
       errorMsg = null;
       currentHtml = null;
       return;
     }
 
-    // Defer heavy work to next frame for rapid j/k navigation
     if (pickRaf) cancelAnimationFrame(pickRaf);
     pickRaf = requestAnimationFrame(() => {
       pickRaf = null;
       if ($selectedPath === path) loadDiff(path);
     });
+
+    // Cleanup on destroy: cancel pending timers/requests
+    return () => {
+      clearSpinnerTimer();
+      if (pickRaf) cancelAnimationFrame(pickRaf);
+      if (abortController) abortController.abort();
+    };
   });
 </script>
 
@@ -241,8 +293,8 @@
     {hunkBadgeText}
   </div>
 
-  {#if loading}
-    <div class="empty">
+  {#if showSpinner}
+    <div class="empty spinner-fade">
       <span class="loading-spinner"></span> Loading…
     </div>
   {:else if errorMsg}
@@ -268,10 +320,10 @@
   #diff-out {
     min-height: 100%;
   }
-  :global(#diff-out.fade-in) {
-    animation: fadeIn 0.1s ease;
+  .spinner-fade {
+    animation: spinnerFadeIn 0.15s ease-out;
   }
-  @keyframes fadeIn {
+  @keyframes spinnerFadeIn {
     from { opacity: 0; }
     to { opacity: 1; }
   }

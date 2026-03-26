@@ -18,9 +18,17 @@ export interface RenderOptions {
  */
 const LARGE_FILE_THRESHOLD = 3000;
 
+function countLines(s: string | null): number {
+  if (!s) return 0;
+  let count = 1;
+  let pos = 0;
+  while ((pos = s.indexOf("\n", pos)) !== -1) { count++; pos++; }
+  return count;
+}
+
 export function stripTrailingWS(s: string | null): string | null {
   if (s == null) return s;
-  return s.split("\n").map((l) => l.trimEnd()).join("\n");
+  return s.replace(/[^\S\n]+$/gm, "");
 }
 
 /**
@@ -117,10 +125,8 @@ export class SSRWorker {
     await this.ensure();
     const id = ++this.nextId;
 
-    // Count combined lines to detect large files
-    const lineCount =
-      (oldContent ? oldContent.split("\n").length : 0) +
-      (newContent ? newContent.split("\n").length : 0);
+    // Count combined lines to detect large files (without allocating arrays)
+    const lineCount = countLines(oldContent) + countLines(newContent);
     const isLarge = lineCount > LARGE_FILE_THRESHOLD;
 
     const options: Record<string, unknown> = {};
@@ -151,10 +157,6 @@ export class SSRWorker {
         reject(new Error("Failed to write to worker: " + e));
       }
     });
-  }
-
-  get isBusy() {
-    return this.pending.size > 0;
   }
 
   kill() {

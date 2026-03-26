@@ -27,11 +27,6 @@
   let sidebar: Sidebar;
   let diffView: DiffView;
 
-  // Use sidebar's visual DFS order for j/k navigation
-  function getFilePaths(): string[] {
-    return sidebar?.getOrderedPaths() ?? $files.map((f) => f.path);
-  }
-
   async function handleRefresh() {
     await refresh();
     diffView?.clearCache();
@@ -51,26 +46,31 @@
   }
 
   function navigateFile(dir: "next" | "prev" | "first" | "last") {
-    const paths = getFilePaths();
-    if (!paths.length) return;
-    const idx = $selectedPath ? paths.indexOf($selectedPath) : -1;
+    const items = sidebar?.getOrderedItems() ?? [];
+    if (!items.length) return;
+    const currentKey = sidebar?.getFocusedKey();
+    const idx = currentKey ? items.findIndex(i => i.key === currentKey) : -1;
     let next: number;
     switch (dir) {
       case "next":
-        next = idx < paths.length - 1 ? idx + 1 : 0;
+        next = idx < items.length - 1 ? idx + 1 : 0;
         break;
       case "prev":
-        next = idx > 0 ? idx - 1 : paths.length - 1;
+        next = idx > 0 ? idx - 1 : items.length - 1;
         break;
       case "first":
         next = 0;
         break;
       case "last":
-        next = paths.length - 1;
+        next = items.length - 1;
         break;
     }
-    $selectedPath = paths[next];
-    sidebar?.scrollFileIntoView(paths[next]);
+    const item = items[next];
+    sidebar?.setFocusedKey(item.key);
+    sidebar?.scrollItemIntoView(item.key);
+    if (item.type === "file") {
+      $selectedPath = item.key;
+    }
   }
 
   /** Apply a render option change and re-render current diff.
@@ -123,8 +123,8 @@
         }
         break;
       case "toggleSidebar":   $sidebarVisible = !$sidebarVisible; break;
-      case "collapseFolder":  sidebar?.collapseSelectedFolder(); break;
-      case "expandFolder":    sidebar?.expandSelectedFolder(); break;
+      case "collapseFolder":  sidebar?.collapseFocused(); break;
+      case "expandFolder":    sidebar?.expandFocused(); break;
       case "collapseAll":     sidebar?.collapseAll(); break;
       case "expandAll":       sidebar?.expandAll(); break;
       case "nextHunk":        diffView?.navigateHunk(1); break;
@@ -181,6 +181,7 @@
 
       if (fl.length > 0) {
         $selectedPath = fl[0].path;
+        sidebar?.setFocusedKey(fl[0].path);
       }
 
       startPreloadStream();
@@ -209,6 +210,7 @@
 
 <Toast />
 <HelpOverlay />
+
 
 <style>
   :global(*) {

@@ -2,21 +2,25 @@
   import { files, selectedPath } from "../lib/state";
   import type { ChangedFile } from "../lib/state";
 
+  export interface SidebarItem {
+    type: "file" | "folder";
+    key: string;
+  }
+
   interface TreeNode {
     name: string;
     kids: Record<string, TreeNode>;
     items: { file: ChangedFile; base: string }[];
   }
 
-  interface FolderState {
-    open: boolean;
-    paths: string[];
-  }
-
   let { visible = true }: { visible: boolean } = $props();
 
-  let folderStates = $state<Map<string, FolderState>>(new Map());
-  let fileElements = new Map<string, HTMLElement>();
+  // Track which folders are open. Key = folder path, value = open.
+  // Folders not in the record are open by default.
+  let folderOpen: Record<string, boolean> = $state({});
+  // Currently focused sidebar item (file path or folder key)
+  let focusedKey: string | null = $state(null);
+  let itemElements = new Map<string, HTMLElement>();
 
   let tree = $derived(buildTree($files));
 
@@ -47,66 +51,140 @@
     }
   }
 
-  /** Collect file paths in the same DFS order as the rendered tree. */
-  function collectPaths(node: TreeNode): string[] {
-    const paths: string[] = [];
+  /** Collect visible sidebar items (folders + files) in DFS visual order.
+   *  Collapsed folders are included but their children are skipped. */
+  function collectVisibleItems(node: TreeNode, prefix: string): SidebarItem[] {
+    const items: SidebarItem[] = [];
     for (const k of Object.keys(node.kids).sort()) {
-      paths.push(...collectPaths(node.kids[k]));
+      const child = node.kids[k];
+      const folderKey = prefix + "/" + child.name;
+      items.push({ type: "folder", key: folderKey });
+      if (isFolderOpen(folderKey)) {
+        items.push(...collectVisibleItems(child, folderKey));
+      }
     }
     for (const item of node.items.slice().sort((a, b) => a.base.localeCompare(b.base))) {
-      paths.push(item.file.path);
+      items.push({ type: "file", key: item.file.path });
     }
-    return paths;
+    return items;
   }
 
-  /** Ordered file paths matching the visual sidebar order. */
-  export function getOrderedPaths(): string[] {
-    return collectPaths(tree);
+  /** Ordered sidebar items in visual order (respects collapsed folders). */
+  export function getOrderedItems(): SidebarItem[] {
+    return collectVisibleItems(tree, "");
   }
 
-  function getFolderState(name: string, node: TreeNode): FolderState {
-    if (!folderStates.has(name)) {
-      folderStates.set(name, { open: true, paths: collectPaths(node) });
+  export function getFocusedKey(): string | null {
+    return focusedKey;
+  }
+
+  export function setFocusedKey(key: string | null) {
+    focusedKey = key;
+  }
+
+  function isFolderOpen(folderKey: string): boolean {
+    return folderOpen[folderKey] !== false;
+  }
+
+  function isFolderKey(key: string): boolean {
+    return key.startsWith("/");
+  }
+
+  function toggleFolder(folderKey: string) {
+    folderOpen[folderKey] = !isFolderOpen(folderKey);
+  }
+
+  /** Collect all folder keys from the tree. */
+  function collectAllFolderKeys(node: TreeNode, prefix: string): string[] {
+    const keys: string[] = [];
+    for (const k of Object.keys(node.kids).sort()) {
+      const child = node.kids[k];
+      const folderKey = prefix + "/" + child.name;
+      keys.push(folderKey);
+      keys.push(...collectAllFolderKeys(child, folderKey));
     }
-    return folderStates.get(name)!;
-  }
-
-  function toggleFolder(name: string, node: TreeNode, forceOpen?: boolean) {
-    const state = getFolderState(name, node);
-    state.open = forceOpen !== undefined ? forceOpen : !state.open;
-    folderStates = new Map(folderStates);
+    return keys;
   }
 
   export function collapseAll() {
-    for (const [, state] of folderStates) state.open = false;
-    folderStates = new Map(folderStates);
+    for (const key of collectAllFolderKeys(tree, "")) {
+      folderOpen[key] = false;
+    }
   }
 
   export function expandAll() {
-    for (const [, state] of folderStates) state.open = true;
-    folderStates = new Map(folderStates);
+    for (const key of collectAllFolderKeys(tree, "")) {
+      folderOpen[key] = true;
+    }
   }
 
-  export function collapseSelectedFolder() {
-    if (!$selectedPath) return;
-    for (const [, state] of folderStates) {
-      if (state.paths.includes($selectedPath) && state.open) {
-        state.open = false;
-        folderStates = new Map(folderStates);
-        return;
+  /** Collapse the focused folder (or the folder containing the focused file). */
+  export function collapseFocused() {
+    const key = focusedKey;
+    if (!key) return;
+    if (isFolderKey(key)) {
+      // Focused on a folder – collapse it if open, otherwise collapse parent
+      if (isFolderOpen(key)) {
+        folderOpen[key] = false;
+      } else {
+        // Go to parent folder
+        const parentKey = key.substring(0, key.lastIndexOf("/"));
+        if (parentKey) {
+          folderOpen[parentKey] = false;
+          focusedKey = parentKey;
+        }
+      }
+    } else {
+      // Focused on a file – collapse innermost folder containing it
+      const folderKey = findFolderForPath(tree, "", key);
+      if (folderKey && isFolderOpen(folderKey)) {
+        folderOpen[folderKey] = false;
+        focusedKey = folderKey;
       }
     }
   }
 
-  export function expandSelectedFolder() {
-    if (!$selectedPath) return;
-    for (const [, state] of folderStates) {
-      if (state.paths.includes($selectedPath) && !state.open) {
-        state.open = true;
-        folderStates = new Map(folderStates);
-        return;
+  /** Expand the focused folder (or the folder containing the focused file). */
+  export function expandFocused() {
+    const key = focusedKey;
+    if (!key) return;
+    if (isFolderKey(key)) {
+      if (!isFolderOpen(key)) {
+        folderOpen[key] = true;
+      }
+    } else {
+      // Focused on a file – expand outermost collapsed folder containing it
+      const folderKey = findCollapsedFolderForPath(tree, "", key);
+      if (folderKey) {
+        folderOpen[folderKey] = true;
       }
     }
+  }
+
+  /** Find the innermost folder containing the given path. */
+  function findFolderForPath(node: TreeNode, prefix: string, path: string): string | null {
+    for (const k of Object.keys(node.kids).sort()) {
+      const child = node.kids[k];
+      const folderKey = prefix + "/" + child.name;
+      if (path.startsWith(folderKey + "/")) {
+        const deeper = findFolderForPath(child, folderKey, path);
+        return deeper ?? folderKey;
+      }
+    }
+    return null;
+  }
+
+  /** Find the outermost collapsed folder containing the given path. */
+  function findCollapsedFolderForPath(node: TreeNode, prefix: string, path: string): string | null {
+    for (const k of Object.keys(node.kids).sort()) {
+      const child = node.kids[k];
+      const folderKey = prefix + "/" + child.name;
+      if (path.startsWith(folderKey + "/")) {
+        if (!isFolderOpen(folderKey)) return folderKey;
+        return findCollapsedFolderForPath(child, folderKey, path);
+      }
+    }
+    return null;
   }
 
   function glyph(status: string): string {
@@ -121,22 +199,29 @@
   }
 
   function selectFile(path: string) {
+    focusedKey = path;
     $selectedPath = path;
   }
 
-  function trackFileEl(node: HTMLElement, path: string) {
-    fileElements.set(path, node);
+  function handleFolderClick(folderKey: string) {
+    focusedKey = folderKey;
+    toggleFolder(folderKey);
+  }
+
+  function trackItemEl(node: HTMLElement, key: string) {
+    itemElements.set(key, node);
     return {
       destroy() {
-        fileElements.delete(path);
+        itemElements.delete(key);
       },
     };
   }
 
-  export function scrollFileIntoView(path: string) {
-    const el = fileElements.get(path);
+  export function scrollItemIntoView(key: string) {
+    const el = itemElements.get(key);
     if (el) el.scrollIntoView({ block: "nearest" });
   }
+
 </script>
 
 <div id="sidebar" class:hidden={!visible}>
@@ -146,16 +231,24 @@
       {#each Object.keys(node.kids).sort() as key}
         {@const child = node.kids[key]}
         {@const folderKey = prefix + "/" + child.name}
-        {@const state = getFolderState(folderKey, child)}
         <button
           class="item"
+          class:sel={focusedKey === folderKey}
           style="padding-left: {depth * 16 + 10}px"
-          onclick={() => toggleFolder(folderKey, child)}
+          onclick={() => handleFolderClick(folderKey)}
+          use:trackItemEl={folderKey}
         >
-          <span class="arrow">{state.open ? "▾" : "▸"}</span>
+          <svg class="folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            {#if isFolderOpen(folderKey)}
+              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>
+              <path d="M2 10h20"/>
+            {:else}
+              <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>
+            {/if}
+          </svg>
           <span class="fname fname-dir">{child.name}</span>
         </button>
-        {#if state.open}
+        {#if isFolderOpen(folderKey)}
           <div>
             {@render renderNode(child, depth + 1, folderKey)}
           </div>
@@ -164,10 +257,10 @@
       {#each node.items.slice().sort((a, b) => a.base.localeCompare(b.base)) as item}
         <button
           class="item"
-          class:sel={$selectedPath === item.file.path}
+          class:sel={focusedKey === item.file.path}
           style="padding-left: {depth * 16 + 10}px"
           onclick={() => selectFile(item.file.path)}
-          use:trackFileEl={item.file.path}
+          use:trackItemEl={item.file.path}
         >
           <span class="st st-{item.file.status}">{glyph(item.file.status)}</span>
           <span
@@ -252,12 +345,12 @@
   .st-deleted { color: var(--del); }
   .st-modified { color: var(--mod); font-size: 14px; }
   .st-renamed, :global(.st-copied) { color: var(--accent); }
-  .arrow {
+  .folder-icon {
     width: 12px;
+    height: 12px;
     flex-shrink: 0;
-    text-align: center;
-    font-size: 9px;
     color: var(--muted);
+    opacity: 0.5;
   }
   .fname {
     flex: 1;

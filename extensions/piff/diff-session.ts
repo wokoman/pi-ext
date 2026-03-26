@@ -3,6 +3,8 @@ import {
   getOldNewContents,
   bulkGetAllContents,
   contentHash,
+  getRepoName,
+  getCurrentBranch,
   type ChangedFile,
 } from "./git.js";
 import {
@@ -64,6 +66,12 @@ export class DiffSession {
   renderOptions: RenderOptions;
 
   private knownHashes = new Map<string, string>();
+  private contentsCache = new Map<string, { oldContent: string | null; newContent: string | null }>();
+  private filesByPath = new Map<string, ChangedFile>();
+
+  /** Cached repo metadata (avoids repeated git process spawns). */
+  repoName: string;
+  branch: string;
 
   /** Hint: which file the user is currently viewing (for preload ordering). */
   currentFile: string | null = null;
@@ -73,14 +81,32 @@ export class DiffSession {
     private cwd: string,
   ) {
     this.renderOptions = { ...DEFAULT_RENDER_OPTIONS };
+    this.repoName = getRepoName(cwd);
+    this.branch = getCurrentBranch(cwd);
     for (let i = 0; i < PRELOAD_WORKERS; i++) {
       this.preloadWorkers.push(new SSRWorker());
     }
+    // Eagerly start all workers so they're warm when first needed
+    this.userWorker.ensure().catch(() => {});
+    for (const w of this.preloadWorkers) w.ensure().catch(() => {});
   }
 
   getFiles(): ChangedFile[] {
-    return (this.filesCache ??= getChangedFiles(this.diffArgs, this.cwd));
+    if (!this.filesCache) {
+      this.filesCache = getChangedFiles(this.diffArgs, this.cwd);
+      this.filesByPath.clear();
+      for (const f of this.filesCache) this.filesByPath.set(f.path, f);
+    }
+    return this.filesCache;
   }
+
+  getFileByPath(path: string): ChangedFile | undefined {
+    this.getFiles(); // ensure populated
+    return this.filesByPath.get(path);
+  }
+
+  private _preloadStatusCache: { cached: number; total: number; preloading: boolean } | null = null;
+  private _preloadStatusTs = 0;
 
   get cachedCount(): number {
     return this.preloadStatus().cached;
@@ -90,11 +116,24 @@ export class DiffSession {
     return hash + "\0" + optionsKey(this.renderOptions);
   }
 
+  /** Invalidate preloadStatus throttle when cache changes. */
+  private cacheSet(key: string, html: string): void {
+    this.cache.set(key, html);
+    this._preloadStatusCache = null;
+  }
+
   // ── User-facing render (dedicated worker, never blocked) ──────
+
+  /** Get old/new contents, using bulk-preload cache when available. */
+  private getContents(file: ChangedFile): { oldContent: string | null; newContent: string | null } {
+    const cached = this.contentsCache.get(file.path);
+    if (cached) return cached;
+    return getOldNewContents(file, this.diffArgs, this.cwd);
+  }
 
   async getDiffHTMLForUser(file: ChangedFile): Promise<string> {
     this.currentFile = file.path;
-    let { oldContent, newContent } = getOldNewContents(file, this.diffArgs, this.cwd);
+    let { oldContent, newContent } = this.getContents(file);
     ({ oldContent, newContent } = applyWhitespace(
       oldContent, newContent, this.renderOptions.ignoreWhitespace,
     ));
@@ -111,7 +150,7 @@ export class DiffSession {
       newContent,
       this.renderOptions,
     );
-    this.cache.set(key, html);
+    this.cacheSet(key, html);
     return html;
   }
 
@@ -174,6 +213,9 @@ export class DiffSession {
       const raw = bulkContents.get(file.path);
       if (!raw) continue;
 
+      // Cache raw contents so user requests don't need git show
+      this.contentsCache.set(file.path, raw);
+
       let { oldContent, newContent } = raw;
       ({ oldContent, newContent } = applyWhitespace(
         oldContent, newContent, this.renderOptions.ignoreWhitespace,
@@ -206,7 +248,7 @@ export class DiffSession {
             this.renderOptions,
           );
           if (!this.aborted) {
-            this.cache.set(item.key, html);
+            this.cacheSet(item.key, html);
           }
         } catch {
           // Worker error — skip this file
@@ -231,11 +273,20 @@ export class DiffSession {
   refresh() {
     this.aborted = true;
     this.filesCache = null;
+    this.filesByPath.clear();
     this.knownHashes.clear();
+    this.contentsCache.clear();
+    this.repoName = getRepoName(this.cwd);
+    this.branch = getCurrentBranch(this.cwd);
     setTimeout(() => this.preloadAll().catch(() => {}), 50);
   }
 
   preloadStatus(): { cached: number; total: number; preloading: boolean } {
+    // Throttle: recompute at most every 100ms
+    const now = Date.now();
+    if (this._preloadStatusCache && now - this._preloadStatusTs < 100) {
+      return this._preloadStatusCache;
+    }
     const files = this.getFiles();
     const optsKey = optionsKey(this.renderOptions);
     let cached = 0;
@@ -243,11 +294,13 @@ export class DiffSession {
       const hash = this.knownHashes.get(file.path);
       if (hash && this.cache.has(hash + "\0" + optsKey)) cached++;
     }
-    return {
+    this._preloadStatusCache = {
       cached,
       total: files.length,
       preloading: !this.aborted && cached < files.length,
     };
+    this._preloadStatusTs = now;
+    return this._preloadStatusCache;
   }
 
   destroy() {

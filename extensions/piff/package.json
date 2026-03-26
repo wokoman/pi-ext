@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "vite build",
-    "dev": "vite dev"
+    "dev": "bun --watch cli.ts & bun ./node_modules/.bin/vite dev & wait"
   },
   "dependencies": {
     "@pierre/diffs": "latest"
