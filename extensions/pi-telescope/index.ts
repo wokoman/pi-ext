@@ -1,26 +1,36 @@
 /**
  * Pi-Telescope Extension
  *
- * A native TUI fuzzy finder for pi, inspired by telescope.nvim and Code Telescope.
+ * A native TUI fuzzy finder for pi, inspired by telescope.nvim and Television.
+ *
+ * Features:
+ *   - Fuzzy search with pattern modifiers ('exact, ^prefix, suffix$, !negate)
+ *   - Multi-select with Tab
+ *   - Provider switching with Ctrl+R
+ *   - Toggle preview with Ctrl+O
+ *   - Help panel with Ctrl+G
+ *   - Provider-specific actions with Ctrl+E
+ *   - Copy to clipboard with Ctrl+Y
+ *   - Frecency-aware sorting
+ *   - Footer with keybinding hints
  *
  * Keybindings:
- *   Ctrl+Q             → open files finder
+ *   Ctrl+X             → open files finder
  *
  * Commands:
  *   /telescope [name]  → open specific provider
  *   /ts [name]         → alias
  *
  * Built-in providers:
- *   files, grep, git-branches, git-log, sessions, skills, commands
+ *   files, git-branches, git-log, sessions, skills, commands
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "./types.js";
 import { openTelescope } from "./telescope.js";
 
-// Providers
 import { createFilesProvider } from "./providers/files.js";
-import { createGrepProvider } from "./providers/grep.js";
+
 import { createGitBranchesProvider } from "./providers/git-branches.js";
 import { createGitLogProvider } from "./providers/git-log.js";
 import { createSessionsProvider } from "./providers/sessions.js";
@@ -32,7 +42,7 @@ type ProviderFactory = (cwd: string, pi: ExtensionAPI) => TelescopeProvider;
 /** Registry of available providers */
 const PROVIDERS: Record<string, ProviderFactory> = {
 	"files":        (cwd) => createFilesProvider(cwd),
-	"grep":         (cwd) => createGrepProvider(cwd),
+
 	"git-branches": (cwd) => createGitBranchesProvider(cwd),
 	"git-log":      (cwd) => createGitLogProvider(cwd),
 	"sessions":     ()    => createSessionsProvider(),
@@ -41,6 +51,18 @@ const PROVIDERS: Record<string, ProviderFactory> = {
 };
 
 const PROVIDER_NAMES = Object.keys(PROVIDERS);
+
+/** Build the allProviders map for Ctrl+R switching */
+function buildAllProviders(
+	cwd: string,
+	pi: ExtensionAPI,
+): Record<string, () => TelescopeProvider> {
+	const result: Record<string, () => TelescopeProvider> = {};
+	for (const [name, factory] of Object.entries(PROVIDERS)) {
+		result[name] = () => factory(cwd, pi);
+	}
+	return result;
+}
 
 async function runTelescope(
 	pi: ExtensionAPI,
@@ -51,22 +73,25 @@ async function runTelescope(
 	const factory = PROVIDERS[name];
 
 	if (!factory) {
-		ctx.ui.notify(`Unknown provider: ${name}. Available: ${PROVIDER_NAMES.join(", ")}`, "warning");
+		ctx.ui.notify(
+			`Unknown provider: ${name}. Available: ${PROVIDER_NAMES.join(", ")}`,
+			"warning",
+		);
 		return;
 	}
 
 	const provider = factory(ctx.cwd, pi);
-	await openTelescope(provider, ctx);
+	await openTelescope(provider, ctx, {
+		allProviders: buildAllProviders(ctx.cwd, pi),
+	});
 }
 
 export default function (pi: ExtensionAPI) {
-	// Main shortcut: Ctrl+T → files
 	pi.registerShortcut("ctrl+x", {
 		description: "Open Telescope fuzzy finder (files)",
 		handler: (ctx) => runTelescope(pi, ctx, "files"),
 	});
 
-	// Command with autocomplete
 	pi.registerCommand("telescope", {
 		description: "Open Telescope fuzzy finder (optional: provider name)",
 		getArgumentCompletions: (prefix) => {
@@ -78,7 +103,6 @@ export default function (pi: ExtensionAPI) {
 		handler: (args, ctx) => runTelescope(pi, ctx, args?.trim() || undefined),
 	});
 
-	// Short alias
 	pi.registerCommand("ts", {
 		description: "Telescope (alias)",
 		getArgumentCompletions: (prefix) => {

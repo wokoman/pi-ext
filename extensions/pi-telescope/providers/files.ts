@@ -2,12 +2,14 @@
  * Files Provider
  *
  * Lists workspace files using fd (fast) with fallback to find.
+ * Supports multi-select and frecency tracking.
  */
 
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
+import { copyToClipboard } from "../clipboard.js";
 
 function hasBinary(name: string): boolean {
 	try {
@@ -49,43 +51,60 @@ function listFiles(cwd: string): string[] {
 	}
 }
 
-export const filesProvider: TelescopeProvider<string> = {
-	name: "files",
-	icon: "📄",
-	description: "Workspace files",
-
-	load(cwd) {
-		return listFiles(cwd);
-	},
-
-	getSearchText(item) {
-		return item;
-	},
-
-	getDisplayText(item, theme, highlighted) {
-		return highlighted ?? item;
-	},
-
-	async onSelect(item, ctx) {
-		const fullPath = resolve(ctx.cwd, item);
-		ctx.ui.pasteToEditor(fullPath);
-	},
-
-	getPreview(item, maxLines) {
-		// Preview will be rendered with theme in telescope.ts
-		// Return raw path for deferred rendering
-		return null; // handled by telescope via filePreview()
-	},
-};
-
-/** Augmented files provider that stores cwd for preview. */
 export function createFilesProvider(cwd: string): TelescopeProvider<string> {
 	return {
-		...filesProvider,
-		load: () => listFiles(cwd),
-		getPreview(item, maxLines) {
-			// Return a marker — telescope.ts will render with theme
+		name: "files",
+		icon: "📄",
+		description: "Workspace files",
+
+		load() {
+			return listFiles(cwd);
+		},
+
+		getSearchText(item) {
+			return item;
+		},
+
+		getDisplayText(item, theme, highlighted) {
+			return highlighted ?? item;
+		},
+
+		async onSelect(item, ctx) {
+			const fullPath = resolve(cwd, item);
+			ctx.ui.pasteToEditor(fullPath);
+		},
+
+		async onMultiSelect(items, ctx) {
+			const paths = items.map((i) => resolve(cwd, i));
+			ctx.ui.pasteToEditor(paths.join(" "));
+		},
+
+		getPreview(item) {
 			return [`__FILE__:${resolve(cwd, item)}`];
+		},
+
+		getFrecencyKey(item) {
+			return item;
+		},
+
+		actions: [
+			{ key: "c", label: "Copy path", description: "Copy file path to clipboard" },
+			{ key: "i", label: "Insert content", description: "Paste file content into editor" },
+		],
+
+		async onAction(actionKey, items, ctx) {
+			if (actionKey === "c") {
+				const paths = items.map((i) => resolve(cwd, i));
+				copyToClipboard(paths.join("\n"));
+			} else if (actionKey === "i") {
+				const { readFileSync } = await import("node:fs");
+				for (const item of items) {
+					try {
+						const content = readFileSync(resolve(cwd, item), "utf-8");
+						ctx.ui.pasteToEditor(content);
+					} catch {}
+				}
+			}
 		},
 	};
 }

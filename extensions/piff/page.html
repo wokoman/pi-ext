@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>piff</title>
+<style>
+/* ── Reset ── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── Theme ── */
+:root {
+  --bg: #15131E;
+  --sidebar: #15131E;
+  --hover: #2a2440;
+  --active: #45475a;
+  --text: #cdd6f4;
+  --muted: #7f849c;
+  --accent: #cba6f7;
+  --border: #313244;
+  --add: #a6e3a1;
+  --del: #f38ba8;
+  --mod: #f9e2af;
+  --diffs-font-family: 'JetBrains Mono', 'JetBrainsMono NF', monospace;
+  --diffs-font-size: 11px;
+  --diffs-line-height: 1.6;
+  --diffs-font-features: "calt" 1, "liga" 1;
+  --diffs-fg-number-override: #45475a;
+  --diffs-fg-number-addition-override: #45475a;
+  --diffs-fg-number-deletion-override: #45475a;
+  --diffs-bg-addition-override: rgba(166, 227, 161, 0.07);
+  --diffs-bg-addition-number-override: rgba(166, 227, 161, 0.07);
+  --diffs-bg-deletion-override: rgba(243, 139, 168, 0.07);
+  --diffs-bg-deletion-number-override: rgba(243, 139, 168, 0.07);
+}
+
+html, body {
+  height: 100%; overflow: hidden;
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+/* ── Layout ── */
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 16px; background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0; font-size: 12px; user-select: none;
+}
+.t-repo { font-weight: 600; }
+.t-branch {
+  font-size: 11px; color: var(--accent);
+  background: rgba(203,166,247,0.12);
+  padding: 1px 6px; border-radius: 3px;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+.t-desc { font-size: 11px; color: var(--muted); font-style: italic; }
+.t-info {
+  margin-left: auto; display: flex; gap: 8px;
+  color: var(--muted); font-size: 11px;
+}
+.t-info .a { color: var(--add); }
+.t-info .d { color: var(--del); }
+
+/* ── Preload + Refresh ── */
+#t-preload {
+  font-size: 10px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  transition: opacity 0.3s;
+}
+#t-preload.done { opacity: 0.3; }
+#t-preload .bar {
+  display: inline-block; width: 48px; height: 3px;
+  background: var(--border); border-radius: 2px;
+  vertical-align: middle; margin-left: 4px; overflow: hidden;
+}
+#t-preload .fill {
+  display: block; height: 100%;
+  background: var(--accent); border-radius: 2px;
+  transition: width 0.3s;
+}
+#btn-refresh {
+  background: none; border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer;
+  border-radius: 4px; padding: 1px 6px;
+  font-size: 11px; line-height: 18px;
+  transition: color 0.15s, border-color 0.15s;
+}
+#btn-refresh:hover, #btn-help:hover { color: var(--text); border-color: var(--muted); }
+#btn-help {
+  background: none; border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer;
+  border-radius: 4px; padding: 1px 6px;
+  font-size: 11px; line-height: 18px;
+  font-weight: 600;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+/* ── Main ── */
+#main { display: flex; flex: 1; min-height: 0; }
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 280px; flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  user-select: none;
+  transition: width 0.15s, opacity 0.15s;
+  overflow: hidden;
+}
+#sidebar.hidden {
+  width: 0; opacity: 0; border-right: none;
+}
+#sidebar-hdr {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--muted);
+}
+#file-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+
+/* ── Sidebar items ── */
+.item {
+  display: flex; align-items: center;
+  width: 100%; border: none; background: none;
+  color: var(--text); text-align: left;
+  font: inherit; cursor: pointer;
+  line-height: 22px; padding: 0 10px;
+}
+.item:hover { background: var(--hover); }
+.item.sel { background: var(--active); }
+
+.st { width: 14px; flex-shrink: 0; text-align: center; font-size: 10px; }
+.st-added { color: var(--add); }
+.st-deleted { color: var(--del); }
+.st-modified { color: var(--mod); font-size: 14px; }
+.st-renamed, .st-copied { color: var(--accent); }
+
+.arrow { width: 12px; flex-shrink: 0; text-align: center; font-size: 9px; color: var(--muted); }
+
+.fname {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+  margin-left: 4px; font-size: 12px;
+}
+.fname-del { text-decoration: line-through; opacity: 0.7; }
+.fname-dir { color: var(--muted); }
+.item:hover .fname-dir { color: var(--text); }
+
+.fst {
+  flex-shrink: 0; display: flex; gap: 3px;
+  font-size: 8px; margin-left: auto; padding-left: 8px;
+  font-variant-numeric: tabular-nums;
+  opacity: 1;
+}
+.fst .a { color: var(--add); }
+.fst .d { color: var(--del); }
+
+/* ── Diff view ── */
+#diff-view { flex: 1; overflow: auto; background: var(--bg); }
+#diff-out { min-height: 100%; }
+#diff-out.fade-in { animation: fadeIn 0.1s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.empty {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--muted); font-size: 13px;
+}
+.empty.err { color: var(--del); }
+
+.loading-spinner {
+  display: inline-block; width: 16px; height: 16px;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.6s linear infinite;
+  margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+/* ── Hunk indicator ── */
+#diff-view { position: relative; }
+#hunk-marker {
+  position: absolute; left: 0; right: 0; height: 2px;
+  background: #fab387; pointer-events: none;
+  z-index: 10; opacity: 0; transition: opacity 0.4s;
+}
+#hunk-marker.visible { opacity: 1; }
+#hunk-badge {
+  position: absolute; top: 8px; right: 14px;
+  background: var(--sidebar); border: 1px solid var(--border);
+  color: var(--accent); padding: 2px 8px;
+  border-radius: 4px; font-size: 11px;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none; z-index: 10;
+  opacity: 0; transition: opacity 0.3s;
+}
+#hunk-badge.visible { opacity: 1; }
+
+/* ── Toolbar toggles ── */
+#t-toggles { display: flex; gap: 4px; }
+.toggle {
+  background: none; border: 1px solid var(--border);
+  color: var(--muted); cursor: pointer;
+  border-radius: 3px; padding: 0 5px;
+  font-size: 10px; line-height: 18px;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.toggle:hover { color: var(--text); border-color: var(--muted); }
+.toggle.on { color: var(--accent); border-color: var(--accent); background: rgba(203,166,247,0.1); }
+
+/* ── Toast ── */
+#toast {
+  position: fixed; bottom: 20px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--sidebar); border: 1px solid var(--border);
+  color: var(--text); padding: 6px 16px;
+  border-radius: 6px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  opacity: 0; transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none; z-index: 999;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── Help overlay ── */
+#help-overlay {
+  display: none; position: fixed; inset: 0;
+  z-index: 1000; background: rgba(0,0,0,0.6);
+  align-items: center; justify-content: center;
+}
+#help-overlay.visible { display: flex; }
+#help-box {
+  background: var(--sidebar); border: 1px solid var(--border);
+  border-radius: 8px; padding: 20px 28px;
+  max-width: 420px; width: 90%;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+#help-box h2 {
+  font-size: 13px; font-weight: 600; margin-bottom: 14px;
+  color: var(--accent); letter-spacing: 0.03em;
+}
+.help-section { margin-bottom: 12px; }
+.help-section h3 {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); margin-bottom: 6px;
+}
+.help-row {
+  display: flex; align-items: center; padding: 2px 0;
+  font-size: 12px; line-height: 1.7;
+}
+.help-key {
+  min-width: 80px; flex-shrink: 0;
+  font-family: "JetBrains Mono", "SF Mono", monospace;
+  font-size: 11px; color: var(--accent);
+}
+.help-desc { color: var(--text); }
+.help-hint {
+  margin-top: 14px; text-align: center;
+  font-size: 11px; color: var(--muted);
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <span class="t-repo" id="t-name"></span>
+    <span class="t-branch" id="t-branch"></span>
+    <span class="t-desc" id="t-desc"></span>
+    <span class="t-info">
+      <span id="t-files"></span>
+      <span style="opacity:0.4">·</span>
+      <span class="a" id="t-add"></span>
+      <span class="d" id="t-del"></span>
+      <span style="opacity:0.4">·</span>
+      <span id="t-preload"><span id="t-preload-text"></span><span class="bar"><span class="fill" id="t-preload-bar" style="width:0%"></span></span></span>
+      <span id="t-toggles">
+        <button class="toggle" id="tog-style" title="Toggle split/unified (s)">split</button>
+        <button class="toggle" id="tog-ws" title="Toggle ignore whitespace (w)">ws</button>
+        <button class="toggle" id="tog-expand" title="Toggle expand unchanged (e)">exp</button>
+      </span>
+      <button id="btn-refresh" title="Refresh diffs (re-read git, rebuild cache)">↻</button>
+      <button id="btn-help" title="Keyboard shortcuts (?)" onclick="document.getElementById('help-overlay').classList.toggle('visible')">?</button>
+    </span>
+  </div>
+  <div id="main">
+    <div id="sidebar">
+      <div id="sidebar-hdr">Changes</div>
+      <div id="file-list"></div>
+    </div>
+    <div id="diff-view">
+      <div id="hunk-marker"></div>
+      <div id="hunk-badge"></div>
+      <div class="empty" id="diff-msg">Select a file</div>
+      <div id="diff-out" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<div id="help-overlay">
+  <div id="help-box">
+    <h2>Keyboard Shortcuts</h2>
+    <div class="help-section">
+      <h3>Files</h3>
+      <div class="help-row"><span class="help-key">j / ↓</span><span class="help-desc">Next file</span></div>
+      <div class="help-row"><span class="help-key">k / ↑</span><span class="help-desc">Previous file</span></div>
+      <div class="help-row"><span class="help-key">J</span><span class="help-desc">Last file</span></div>
+      <div class="help-row"><span class="help-key">K</span><span class="help-desc">First file</span></div>
+      <div class="help-row"><span class="help-key">y</span><span class="help-desc">Copy file path</span></div>
+      <div class="help-row"><span class="help-key">b</span><span class="help-desc">Toggle sidebar</span></div>
+      <div class="help-row"><span class="help-key">h / l</span><span class="help-desc">Collapse / expand folder</span></div>
+      <div class="help-row"><span class="help-key">H / L</span><span class="help-desc">Collapse / expand all</span></div>
+    </div>
+    <div class="help-section">
+      <h3>Diff navigation</h3>
+      <div class="help-row"><span class="help-key">n</span><span class="help-desc">Next changed hunk</span></div>
+      <div class="help-row"><span class="help-key">N</span><span class="help-desc">Previous changed hunk</span></div>
+      <div class="help-row"><span class="help-key">gg</span><span class="help-desc">Scroll to top</span></div>
+      <div class="help-row"><span class="help-key">G</span><span class="help-desc">Scroll to bottom</span></div>
+      <div class="help-row"><span class="help-key">Ctrl+d / u</span><span class="help-desc">Scroll ½ page down / up</span></div>
+      <div class="help-row"><span class="help-key">Ctrl+f / b</span><span class="help-desc">Scroll full page down / up</span></div>
+    </div>
+    <div class="help-section">
+      <h3>Display</h3>
+      <div class="help-row"><span class="help-key">s</span><span class="help-desc">Toggle split / unified</span></div>
+      <div class="help-row"><span class="help-key">w</span><span class="help-desc">Toggle ignore whitespace</span></div>
+      <div class="help-row"><span class="help-key">e</span><span class="help-desc">Toggle expand unchanged</span></div>
+    </div>
+    <div class="help-section">
+      <h3>General</h3>
+      <div class="help-row"><span class="help-key">?</span><span class="help-desc">Toggle this help</span></div>
+    </div>
+    <div class="help-hint">Press <strong>?</strong> or <strong>Esc</strong> to close</div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var files = [];
+  var selected = null;
+  var fileEls = [];
+  var clientCache = {}; // path → html string (client-side, instant swap)
+
+  // ── Render options state ──
+  var renderOpts = { diffStyle: 'split', expandUnchanged: true, ignoreWhitespace: false };
+
+  function showToast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._timer);
+    t._timer = setTimeout(function() { t.classList.remove('show'); }, 1500);
+  }
+
+  function syncToggleUI() {
+    var s = document.getElementById('tog-style');
+    var w = document.getElementById('tog-ws');
+    var ex = document.getElementById('tog-expand');
+    s.textContent = renderOpts.diffStyle;
+    s.classList.toggle('on', renderOpts.diffStyle === 'unified');
+    w.classList.toggle('on', renderOpts.ignoreWhitespace);
+    ex.classList.toggle('on', !renderOpts.expandUnchanged);
+  }
+
+  function setRenderOption(opts) {
+    Object.assign(renderOpts, opts);
+    syncToggleUI();
+    clientCache = {};
+    fetch('/api/options', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts),
+    }).then(function() {
+      if (selected) { forcePick(selected); }
+    });
+  }
+
+  // ── Helpers ──
+  function esc(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function glyph(s) {
+    switch (s) {
+      case 'added':    return '+';
+      case 'deleted':  return '\u2212';
+      case 'modified': return '\u00B7';
+      case 'renamed':  return '\u2192';
+      case 'copied':   return '\u00A9';
+      default:         return '?';
+    }
+  }
+
+  // ── Preload progress polling ──
+  var preloadTimer = null;
+
+  function pollPreload() {
+    fetch('/api/info').then(function(r) { return r.json(); }).then(function(info) {
+      var el = document.getElementById('t-preload');
+      var txt = document.getElementById('t-preload-text');
+      var bar = document.getElementById('t-preload-bar');
+      var total = info.total || info.fileCount || 1;
+      var cached = info.cached || 0;
+      var pct = Math.round(cached / total * 100);
+      txt.textContent = cached + '/' + total;
+      bar.style.width = pct + '%';
+      if (cached >= total) {
+        el.className = 'done';
+        txt.textContent = '\u2713 ' + total;
+        bar.style.width = '100%';
+        clearInterval(preloadTimer);
+        preloadTimer = null;
+      }
+    }).catch(function() {});
+  }
+
+  function startPreloadPolling() {
+    if (preloadTimer) clearInterval(preloadTimer);
+    var el = document.getElementById('t-preload');
+    el.className = '';
+    preloadTimer = setInterval(pollPreload, 800);
+    pollPreload();
+  }
+
+  // ── Refresh ──
+  document.getElementById('btn-refresh').onclick = function() {
+    fetch('/api/refresh').then(function() {
+      clientCache = {};
+      // Re-fetch file list + restart polling
+      fetch('/api/files').then(function(r) { return r.json(); }).then(function(fl) {
+        files = fl;
+        document.getElementById('t-files').textContent = files.length + ' file' + (files.length !== 1 ? 's' : '');
+        var ta = 0, td = 0;
+        for (var i = 0; i < files.length; i++) { ta += files[i].additions; td += files[i].deletions; }
+        document.getElementById('t-add').textContent = ta ? '+' + ta : '';
+        document.getElementById('t-del').textContent = td ? '\u2212' + td : '';
+        renderSidebar();
+        startPreloadPolling();
+        if (selected) pick(selected);
+        else if (files.length > 0) pick(files[0].path);
+      });
+    });
+  };
+
+  // ── Init ──
+  function init() {
+    // Fetch current render options from server
+    fetch('/api/options').then(function(r) { return r.json(); }).then(function(opts) {
+      renderOpts.diffStyle = opts.diffStyle || 'split';
+      renderOpts.expandUnchanged = opts.expandUnchanged !== false;
+      renderOpts.ignoreWhitespace = !!opts.ignoreWhitespace;
+      syncToggleUI();
+    }).catch(function() {});
+
+    Promise.all([
+      fetch('/api/info').then(function(r) { return r.json(); }),
+      fetch('/api/files').then(function(r) { return r.json(); })
+    ]).then(function(res) {
+      var info = res[0];
+      files = res[1];
+
+      document.getElementById('t-name').textContent = info.name;
+      document.getElementById('t-branch').textContent = info.branch;
+      document.getElementById('t-desc').textContent = info.description;
+      document.getElementById('t-files').textContent = files.length + ' file' + (files.length !== 1 ? 's' : '');
+
+      var ta = 0, td = 0;
+      for (var i = 0; i < files.length; i++) { ta += files[i].additions; td += files[i].deletions; }
+      if (ta) document.getElementById('t-add').textContent = '+' + ta;
+      if (td) document.getElementById('t-del').textContent = '\u2212' + td;
+
+      renderSidebar();
+      startPreloadPolling();
+      if (files.length > 0) pick(files[0].path);
+    }).catch(function(e) {
+      document.getElementById('diff-msg').textContent = 'Failed to load: ' + e.message;
+      document.getElementById('diff-msg').className = 'empty err';
+    });
+  }
+
+  // ── Tree builder ──
+  function buildTree(list) {
+    var root = { name: '', kids: {}, items: [] };
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      var parts = f.path.split('/');
+      var node = root;
+      for (var j = 0; j < parts.length - 1; j++) {
+        if (!node.kids[parts[j]]) node.kids[parts[j]] = { name: parts[j], kids: {}, items: [] };
+        node = node.kids[parts[j]];
+      }
+      node.items.push({ file: f, base: parts[parts.length - 1] });
+    }
+    squash(root);
+    return root;
+  }
+
+  function squash(n) {
+    var keys = Object.keys(n.kids);
+    for (var i = 0; i < keys.length; i++) squash(n.kids[keys[i]]);
+    keys = Object.keys(n.kids);
+    if (keys.length === 1 && n.items.length === 0) {
+      var c = n.kids[keys[0]];
+      n.name = n.name ? n.name + '/' + c.name : c.name;
+      n.kids = c.kids;
+      n.items = c.items;
+    }
+  }
+
+  // ── Sidebar render ──
+  var folderEls = []; // { btn, wrap, open, paths[] }
+
+  function renderSidebar() {
+    var tree = buildTree(files);
+    var list = document.getElementById('file-list');
+    list.innerHTML = '';
+    fileEls = [];
+    folderEls = [];
+    renderNode(tree, list, 0);
+  }
+
+  // Collect all file paths under a tree node
+  function collectPaths(node) {
+    var paths = [];
+    var keys = Object.keys(node.kids);
+    for (var i = 0; i < keys.length; i++) {
+      paths = paths.concat(collectPaths(node.kids[keys[i]]));
+    }
+    for (var i = 0; i < node.items.length; i++) {
+      paths.push(node.items[i].file.path);
+    }
+    return paths;
+  }
+
+  function toggleFolder(folder, forceOpen) {
+    var open = (forceOpen !== undefined) ? forceOpen : !folder.open;
+    folder.open = open;
+    folder.btn.querySelector('.arrow').textContent = open ? '\u25BE' : '\u25B8';
+    folder.wrap.style.display = open ? '' : 'none';
+  }
+
+  function renderNode(node, parent, depth) {
+    var fkeys = Object.keys(node.kids).sort();
+    for (var i = 0; i < fkeys.length; i++) {
+      var child = node.kids[fkeys[i]];
+      var btn = document.createElement('button');
+      btn.className = 'item';
+      btn.style.paddingLeft = (depth * 16 + 10) + 'px';
+      btn.innerHTML = '<span class="arrow">\u25BE</span>' +
+                      '<span class="fname fname-dir">' + esc(child.name) + '</span>';
+
+      var wrap = document.createElement('div');
+      renderNode(child, wrap, depth + 1);
+      parent.appendChild(btn);
+      parent.appendChild(wrap);
+
+      var folder = { btn: btn, wrap: wrap, open: true, paths: collectPaths(child) };
+      folderEls.push(folder);
+
+      (function(f) {
+        f.btn.onclick = function() { toggleFolder(f); };
+      })(folder);
+    }
+
+    var sorted = node.items.slice().sort(function(a, b) { return a.base.localeCompare(b.base); });
+    for (var i = 0; i < sorted.length; i++) {
+      var f = sorted[i].file;
+      var btn = document.createElement('button');
+      btn.className = 'item';
+      btn.dataset.path = f.path;
+      btn.style.paddingLeft = (depth * 16 + 10) + 'px';
+
+      var stCls = 'st st-' + f.status;
+      var nameCls = 'fname' + (f.status === 'deleted' ? ' fname-del' : '');
+      var stats = '';
+      if (f.additions > 0) stats += '<span class="a">+' + f.additions + '</span>';
+      if (f.deletions > 0) stats += '<span class="d">\u2212' + f.deletions + '</span>';
+
+      btn.innerHTML =
+        '<span class="' + stCls + '">' + glyph(f.status) + '</span>' +
+        '<span class="' + nameCls + '" title="' + esc(f.path) + '">' + esc(sorted[i].base) + '</span>' +
+        '<span class="fst">' + stats + '</span>';
+
+      (function(b, path) { b.onclick = function() { pick(path); }; })(btn, f.path);
+      parent.appendChild(btn);
+      fileEls.push({ path: f.path, el: btn });
+    }
+  }
+
+  // ── Render cached HTML instantly (no flicker) ──
+  function renderCached(path, html) {
+    var out = document.getElementById('diff-out');
+    var msg = document.getElementById('diff-msg');
+    var view = document.getElementById('diff-view');
+
+    resetHunks();
+    msg.style.display = 'none';
+
+    var wrapper = document.createElement('div');
+    wrapper.style.colorScheme = 'dark';
+    var shadow = wrapper.attachShadow({ mode: 'open' });
+    shadow.innerHTML = html;
+
+    out.innerHTML = '';
+    out.appendChild(wrapper);
+    out.style.display = '';
+    out.classList.remove('fade-in');
+    // reflow trick to restart animation
+    void out.offsetWidth;
+    out.classList.add('fade-in');
+
+    view.scrollTop = 0;
+  }
+
+  // ── File selection + diff rendering (SSR → Shadow DOM) ──
+  var pickRaf = null;
+  var loadAbort = null;
+
+  function forcePick(path) {
+    selected = null;
+    pick(path);
+  }
+
+  function pick(path) {
+    if (selected === path) return;
+    selected = path;
+
+    // 1) Always instant: sidebar highlight (zero DOM weight)
+    for (var i = 0; i < fileEls.length; i++) {
+      fileEls[i].el.classList.toggle('sel', fileEls[i].path === path);
+    }
+
+    // 2) Abort any in-flight fetch
+    if (loadAbort) { loadAbort.abort(); loadAbort = null; }
+
+    // 3) Defer all heavy work (DOM clear, render, fetch) to next frame.
+    //    If j/k is pressed again before the frame fires, it gets cancelled.
+    if (pickRaf) cancelAnimationFrame(pickRaf);
+    pickRaf = requestAnimationFrame(function() {
+      pickRaf = null;
+      if (selected !== path) return;
+      renderOrLoad(path);
+    });
+  }
+
+  function renderOrLoad(path) {
+    // Cached → render (may be heavy for large diffs but unavoidable)
+    if (clientCache[path]) {
+      renderCached(path, clientCache[path]);
+      return;
+    }
+
+    // Not cached → clear view, start fetch
+    resetHunks();
+    var msg = document.getElementById('diff-msg');
+    var out = document.getElementById('diff-out');
+    out.style.display = 'none';
+    out.innerHTML = '';
+    msg.innerHTML = '<span class="loading-spinner"></span> Loading\u2026';
+    msg.className = 'empty';
+    msg.style.display = '';
+
+    var abort = new AbortController();
+    loadAbort = abort;
+
+    fetch('/api/diff/' + encodeURIComponent(path), { signal: abort.signal })
+      .then(function(r) {
+        if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) {
+          throw new Error(d.error || 'HTTP ' + r.status);
+        });
+        return r.json();
+      })
+      .then(function(data) {
+        if (selected !== path) return;
+        if (data.html) {
+          clientCache[path] = data.html;
+          renderCached(path, data.html);
+        } else {
+          msg.textContent = 'No changes';
+          msg.className = 'empty';
+        }
+      })
+      .catch(function(e) {
+        if (e.name === 'AbortError') return;
+        if (selected !== path) return;
+        // Auto-retry once after 400ms (worker might have been restarting)
+        if (!renderOrLoad._retried) {
+          renderOrLoad._retried = true;
+          setTimeout(function() {
+            renderOrLoad._retried = false;
+            if (selected === path) renderOrLoad(path);
+          }, 400);
+          return;
+        }
+        renderOrLoad._retried = false;
+        msg.textContent = e.message;
+        msg.className = 'empty err';
+      });
+  }
+  renderOrLoad._retried = false;
+
+  // ── Toolbar toggle clicks ──
+  document.getElementById('tog-style').onclick = function() {
+    setRenderOption({ diffStyle: renderOpts.diffStyle === 'split' ? 'unified' : 'split' });
+  };
+  document.getElementById('tog-ws').onclick = function() {
+    setRenderOption({ ignoreWhitespace: !renderOpts.ignoreWhitespace });
+  };
+  document.getElementById('tog-expand').onclick = function() {
+    setRenderOption({ expandUnchanged: !renderOpts.expandUnchanged });
+  };
+
+  // ── Hunk navigation (index-based) ──
+  var hunkCache = null; // cached array of { y, height } for current diff
+  var hunkIdx = -1;     // current hunk index, -1 = none
+
+  function resetHunks() {
+    hunkCache = null;
+    hunkIdx = -1;
+    hideHunkUI();
+  }
+
+  function buildHunkCache() {
+    var out = document.getElementById('diff-out');
+    var wrapper = out && out.firstChild;
+    if (!wrapper || !wrapper.shadowRoot) return [];
+    var all = wrapper.shadowRoot.querySelectorAll(
+      '[data-line-type="change-addition"], [data-line-type="change-deletion"]'
+    );
+    if (!all.length) return [];
+
+    var view = document.getElementById('diff-view');
+    var viewRect = view.getBoundingClientRect();
+    var scrollTop = view.scrollTop;
+
+    // Collect rows with absolute Y, dedup by 4px bucket (split view: same Y both sides)
+    var seen = {};
+    var rows = [];
+    for (var i = 0; i < all.length; i++) {
+      var rect = all[i].getBoundingClientRect();
+      var absY = rect.top - viewRect.top + scrollTop;
+      var bucket = Math.round(absY / 4) * 4;
+      if (!seen[bucket]) {
+        seen[bucket] = true;
+        rows.push({ y: absY, h: rect.height });
+      }
+    }
+    rows.sort(function(a, b) { return a.y - b.y; });
+
+    // Group rows into hunks (gap > 30px = new hunk)
+    var hunks = [];
+    var hy = rows[0].y;
+    var hEnd = rows[0].y + rows[0].h;
+    for (var i = 1; i < rows.length; i++) {
+      if (rows[i].y - hEnd > 30) {
+        hunks.push({ y: hy, height: hEnd - hy });
+        hy = rows[i].y;
+      }
+      hEnd = rows[i].y + rows[i].h;
+    }
+    hunks.push({ y: hy, height: hEnd - hy });
+    return hunks;
+  }
+
+  function getHunks() {
+    if (!hunkCache) hunkCache = buildHunkCache();
+    return hunkCache;
+  }
+
+  function showHunkUI(idx, total, hunk) {
+    var view = document.getElementById('diff-view');
+    var marker = document.getElementById('hunk-marker');
+    var badge = document.getElementById('hunk-badge');
+
+    // Position marker at hunk Y (relative to scroll content)
+    marker.style.top = hunk.y + 'px';
+    marker.classList.add('visible');
+
+    badge.textContent = (idx + 1) + ' / ' + total;
+    badge.classList.add('visible');
+
+    clearTimeout(showHunkUI._fadeTimer);
+    showHunkUI._fadeTimer = setTimeout(function() {
+      marker.classList.remove('visible');
+      badge.classList.remove('visible');
+    }, 2000);
+  }
+
+  function hideHunkUI() {
+    document.getElementById('hunk-marker').classList.remove('visible');
+    document.getElementById('hunk-badge').classList.remove('visible');
+    clearTimeout(showHunkUI._fadeTimer);
+  }
+
+  function scrollToHunk(dir) {
+    var hunks = getHunks();
+    if (!hunks.length) return;
+
+    var next = hunkIdx + dir;
+    if (next < 0) next = 0;
+    if (next >= hunks.length) next = hunks.length - 1;
+    if (next === hunkIdx && hunkIdx >= 0) return; // already at boundary
+
+    hunkIdx = next;
+    var hunk = hunks[hunkIdx];
+    var view = document.getElementById('diff-view');
+    view.scrollTo({ top: Math.max(0, hunk.y - 60) });
+    showHunkUI(hunkIdx, hunks.length, hunk);
+  }
+
+  // ── Sidebar toggle & folder control ──
+  function toggleSidebar() {
+    document.getElementById('sidebar').classList.toggle('hidden');
+  }
+
+  // Find the innermost folder containing the selected file
+  function findFolderForSelected() {
+    if (!selected) return null;
+    var best = null;
+    for (var i = 0; i < folderEls.length; i++) {
+      var f = folderEls[i];
+      if (f.paths.indexOf(selected) !== -1) {
+        // Pick the one with fewest paths (= most specific / innermost)
+        if (!best || f.paths.length < best.paths.length) best = f;
+      }
+    }
+    return best;
+  }
+
+  function collapseAllFolders() {
+    for (var i = 0; i < folderEls.length; i++) toggleFolder(folderEls[i], false);
+  }
+
+  function expandAllFolders() {
+    for (var i = 0; i < folderEls.length; i++) toggleFolder(folderEls[i], true);
+  }
+
+  // ── Vim-style keyboard navigation ──
+  var pendingG = false; // for gg sequence
+  var helpOverlay = document.getElementById('help-overlay');
+
+  function toggleHelp() {
+    helpOverlay.classList.toggle('visible');
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    // ? – toggle help (works even when overlay is open)
+    if (e.key === '?') {
+      e.preventDefault();
+      toggleHelp();
+      return;
+    }
+
+    // Esc – close help overlay
+    if (e.key === 'Escape' && helpOverlay.classList.contains('visible')) {
+      e.preventDefault();
+      helpOverlay.classList.remove('visible');
+      return;
+    }
+
+    // Don't process other keys when help is open
+    if (helpOverlay.classList.contains('visible')) return;
+
+    var view = document.getElementById('diff-view');
+    var scrollAmount = view.clientHeight;
+
+    // Ctrl+d / Ctrl+u – half-page scroll
+    if (e.ctrlKey && e.key === 'd') {
+      e.preventDefault();
+      view.scrollBy({ top: scrollAmount / 2, behavior: 'smooth' });
+      return;
+    }
+    if (e.ctrlKey && e.key === 'u') {
+      e.preventDefault();
+      view.scrollBy({ top: -scrollAmount / 2, behavior: 'smooth' });
+      return;
+    }
+
+    // Ctrl+f / Ctrl+b – full-page scroll
+    if (e.ctrlKey && e.key === 'f') {
+      e.preventDefault();
+      view.scrollBy({ top: scrollAmount, behavior: 'smooth' });
+      return;
+    }
+    if (e.ctrlKey && e.key === 'b') {
+      e.preventDefault();
+      view.scrollBy({ top: -scrollAmount, behavior: 'smooth' });
+      return;
+    }
+
+    // gg – scroll diff to top
+    if (e.key === 'g' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      if (pendingG) {
+        e.preventDefault();
+        pendingG = false;
+        view.scrollTo({ top: 0 });
+      } else {
+        pendingG = true;
+        setTimeout(function() { pendingG = false; }, 500);
+      }
+      return;
+    }
+
+    pendingG = false;
+
+    // G – scroll diff to bottom
+    if (e.key === 'G' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      view.scrollTo({ top: view.scrollHeight });
+      return;
+    }
+
+    // n / N – next / previous hunk
+    if (e.key === 'n') { e.preventDefault(); scrollToHunk(1); return; }
+    if (e.key === 'N') { e.preventDefault(); scrollToHunk(-1); return; }
+
+    // s – toggle split/unified
+    if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setRenderOption({ diffStyle: renderOpts.diffStyle === 'split' ? 'unified' : 'split' });
+      return;
+    }
+
+    // w – toggle ignore whitespace
+    if (e.key === 'w' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setRenderOption({ ignoreWhitespace: !renderOpts.ignoreWhitespace });
+      return;
+    }
+
+    // e – toggle expand unchanged
+    if (e.key === 'e' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      setRenderOption({ expandUnchanged: !renderOpts.expandUnchanged });
+      return;
+    }
+
+    // y – copy file path
+    if (e.key === 'y' && !e.ctrlKey && !e.metaKey && selected) {
+      e.preventDefault();
+      navigator.clipboard.writeText(selected).then(function() {
+        showToast('Copied: ' + selected);
+      });
+      return;
+    }
+
+    // b – toggle sidebar
+    if (e.key === 'b' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      toggleSidebar();
+      return;
+    }
+
+    // h – collapse current folder
+    if (e.key === 'h' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      var f = findFolderForSelected();
+      if (f && f.open) toggleFolder(f, false);
+      return;
+    }
+
+    // l – expand current folder
+    if (e.key === 'l' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      var f = findFolderForSelected();
+      if (f && !f.open) toggleFolder(f, true);
+      return;
+    }
+
+    // H – collapse all folders
+    if (e.key === 'H' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      collapseAllFolders();
+      return;
+    }
+
+    // L – expand all folders
+    if (e.key === 'L' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      expandAllFolders();
+      return;
+    }
+
+    if (!fileEls.length) return;
+
+    var idx = -1;
+    if (selected) {
+      for (var i = 0; i < fileEls.length; i++) {
+        if (fileEls[i].path === selected) { idx = i; break; }
+      }
+    }
+
+    // j / ArrowDown – next file
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      var next = idx < fileEls.length - 1 ? idx + 1 : 0;
+      pick(fileEls[next].path);
+      fileEls[next].el.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    // k / ArrowUp – previous file
+    if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      var prev = idx > 0 ? idx - 1 : fileEls.length - 1;
+      pick(fileEls[prev].path);
+      fileEls[prev].el.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    // K – first file
+    if (e.key === 'K') {
+      e.preventDefault();
+      pick(fileEls[0].path);
+      fileEls[0].el.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    // J – last file
+    if (e.key === 'J') {
+      e.preventDefault();
+      var last = fileEls.length - 1;
+      pick(fileEls[last].path);
+      fileEls[last].el.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+  });
+
+  // Close help on click outside the box
+  helpOverlay.addEventListener('click', function(e) {
+    if (e.target === helpOverlay) helpOverlay.classList.remove('visible');
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>

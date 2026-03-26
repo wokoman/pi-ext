@@ -1,10 +1,13 @@
 /**
  * Git Log Provider
+ *
+ * Actions: copy hash, show diff
  */
 
 import { execSync } from "node:child_process";
-import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
+import { copyToClipboard } from "../clipboard.js";
 
 interface Commit {
 	hash: string;
@@ -74,8 +77,36 @@ export function createGitLogProvider(cwd: string): TelescopeProvider<Commit> {
 			ctx.ui.pasteToEditor(item.hash);
 		},
 
+		async onMultiSelect(items, ctx) {
+			ctx.ui.pasteToEditor(items.map((i) => i.hash).join(" "));
+		},
+
 		getPreview(item, maxLines) {
 			return commitPreview(item, cwd, maxLines);
+		},
+
+		getFrecencyKey(item) {
+			return item.hash;
+		},
+
+		actions: [
+			{ key: "c", label: "Copy hash", description: "Copy commit hash to clipboard" },
+			{ key: "d", label: "Show diff", description: "Paste git show command" },
+			{ key: "k", label: "Cherry-pick", description: "Paste cherry-pick command" },
+		],
+
+		async onAction(actionKey, items, ctx) {
+			const item = items[0];
+			if (!item) return;
+
+			if (actionKey === "c") {
+				copyToClipboard(items.map((i) => i.hash).join("\n"));
+			} else if (actionKey === "d") {
+				ctx.ui.pasteToEditor(`git show ${item.hash}`);
+			} else if (actionKey === "k") {
+				const hashes = items.map((i) => i.hash).join(" ");
+				ctx.ui.pasteToEditor(`git cherry-pick ${hashes}`);
+			}
 		},
 	};
 }

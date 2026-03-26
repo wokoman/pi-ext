@@ -91,7 +91,6 @@ File-based todo management stored in `.pi/todos/`. Each todo is a standalone mar
 |-------|-------------|
 | [commit](skills/commit/) | Conventional Commits-style `git commit` — infers type, scope, and summary from the diff |
 | [github](skills/github/) | Recipes for the `gh` CLI — PR checks, CI runs, issue queries, JSON output |
-| [librarian](skills/librarian/) | Research open-source libraries with evidence-backed answers and GitHub permalinks |
 
 ## Themes
 

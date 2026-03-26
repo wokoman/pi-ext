@@ -6,8 +6,9 @@
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
+import { copyToClipboard } from "../clipboard.js";
 
 interface SkillInfo {
 	name: string;
@@ -18,7 +19,6 @@ interface SkillInfo {
 
 function extractDescription(content: string): string {
 	const lines = content.split("\n");
-	// Check YAML frontmatter
 	if (lines[0]?.trim() === "---") {
 		const endIdx = lines.indexOf("---", 1);
 		if (endIdx > 0) {
@@ -28,7 +28,6 @@ function extractDescription(content: string): string {
 			}
 		}
 	}
-	// Fallback: first non-empty, non-heading line
 	for (const line of lines) {
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith("#") || trimmed === "---") continue;
@@ -70,7 +69,7 @@ function loadAllSkills(cwd: string): SkillInfo[] {
 	// User skills
 	all.push(...scanSkillDir(join(home, ".pi/agent/skills"), "user"));
 
-	// Package skills (from pi-ext itself)
+	// Package skills
 	try {
 		const piExtSkills = join(dirname(dirname(dirname(import.meta.url.replace("file://", "")))), "skills");
 		all.push(...scanSkillDir(piExtSkills, "global"));
@@ -131,6 +130,20 @@ export function createSkillsProvider(cwd: string): TelescopeProvider<SkillInfo> 
 				return content.split("\n").slice(0, maxLines);
 			} catch {
 				return ["(no preview)"];
+			}
+		},
+
+		getFrecencyKey(item) {
+			return item.name;
+		},
+
+		actions: [
+			{ key: "c", label: "Copy path", description: "Copy SKILL.md path to clipboard" },
+		],
+
+		onAction(actionKey, items) {
+			if (actionKey === "c") {
+				copyToClipboard(items.map((i) => i.path).join("\n"));
 			}
 		},
 	};

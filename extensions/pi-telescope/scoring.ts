@@ -1,16 +1,24 @@
 /**
  * fzf-style Fuzzy Scoring Engine
  *
- * Ported from Code Telescope's score-engine.ts with adaptations for terminal.
- * Supports subsequence matching with smart scoring:
- *   - Consecutive character bonus
- *   - Word boundary bonus (/, \, _, -, ., space)
- *   - Filename start bonus (after last /)
- *   - Path start bonus
- *   - camelCase boundary bonus
+ * Supports:
+ *   - Subsequence matching with smart scoring
+ *   - Pattern modifiers: 'exact, ^prefix, suffix$, !negate
+ *   - Multiple tokens (space-separated, AND logic)
+ *   - Frecency boost integration
+ *
+ * Scoring bonuses:
+ *   - Consecutive character: +15
+ *   - Word boundary (/, \, _, -, ., space): +15
+ *   - Filename start (after last /): +50
+ *   - Path start: +20
+ *   - camelCase boundary: +5
+ *   - Gap penalty: -min(distance, 15)
  */
 
 import type { ScoredItem } from "./types.js";
+
+// ── Character classification ────────────────────────
 
 function isWordBoundary(text: string, idx: number): boolean {
 	if (idx === 0) return true;
@@ -30,10 +38,10 @@ function isUpperCase(text: string, idx: number): boolean {
 	return code >= 65 && code <= 90;
 }
 
+// ── Core matching ───────────────────────────────────
+
 /**
  * Compute the best fuzzy match for a query against text.
- * Returns score and matched character indices.
- *
  * Uses a beam-search approach: for each query character, explore
  * all possible positions in text, keeping the top N candidates.
  */
@@ -112,9 +120,9 @@ function computeBestMatch(
 	return beam[0] ?? { score: -Infinity, indices: [] };
 }
 
-/**
- * Check if query is a subsequence of text (case-insensitive).
- */
+// ── Subsequence check ───────────────────────────────
+
+/** Check if query is a subsequence of text (case-insensitive). */
 export function isSubsequence(query: string, text: string): boolean {
 	if (query.length > text.length) return false;
 	const lq = query.toLowerCase();
@@ -126,10 +134,7 @@ export function isSubsequence(query: string, text: string): boolean {
 	return qi === lq.length;
 }
 
-/**
- * Score and match a query against text.
- * Returns { score, indices } where score is -Infinity for no match.
- */
+/** Score and match a query against text. */
 export function computeMatch(
 	query: string,
 	text: string,
@@ -139,42 +144,134 @@ export function computeMatch(
 	return computeBestMatch(query.toLowerCase(), text);
 }
 
+// ── Pattern modifiers ───────────────────────────────
+
+interface ParsedToken {
+	type: "fuzzy" | "exact" | "prefix" | "suffix" | "negate";
+	text: string;
+}
+
+/**
+ * Parse a query string into tokens with pattern modifiers.
+ *
+ * Syntax (inspired by Television):
+ *   'term  → exact substring match
+ *   ^term  → prefix match
+ *   term$  → suffix match
+ *   !term  → negate (exclude matches)
+ *   term   → fuzzy match (default)
+ *
+ * Tokens are space-separated and AND-ed together.
+ */
+export function parseQueryTokens(query: string): ParsedToken[] {
+	if (!query) return [];
+	return query
+		.split(/\s+/)
+		.filter(Boolean)
+		.map((token) => {
+			if (token.startsWith("'") && token.length > 1)
+				return { type: "exact" as const, text: token.slice(1) };
+			if (token.startsWith("^") && token.length > 1)
+				return { type: "prefix" as const, text: token.slice(1) };
+			if (token.startsWith("!") && token.length > 1)
+				return { type: "negate" as const, text: token.slice(1) };
+			if (token.endsWith("$") && token.length > 1)
+				return { type: "suffix" as const, text: token.slice(0, -1) };
+			return { type: "fuzzy" as const, text: token };
+		});
+}
+
+/**
+ * Check if an item passes all modifier (non-fuzzy) tokens.
+ */
+function passesModifiers(lowerText: string, modifiers: ParsedToken[]): boolean {
+	for (const token of modifiers) {
+		const lt = token.text.toLowerCase();
+		switch (token.type) {
+			case "exact":
+				if (!lowerText.includes(lt)) return false;
+				break;
+			case "prefix":
+				// Match start of string or start of any path segment
+				if (!lowerText.startsWith(lt) && !lowerText.includes("/" + lt))
+					return false;
+				break;
+			case "suffix":
+				if (!lowerText.endsWith(lt)) return false;
+				break;
+			case "negate":
+				if (lowerText.includes(lt)) return false;
+				break;
+		}
+	}
+	return true;
+}
+
+// ── Main filter/score API ───────────────────────────
+
 /**
  * Filter and score a list of items against a query.
  * Returns items sorted by score (best first), with match indices.
+ *
+ * Supports pattern modifiers and optional frecency boost.
  */
 export function filterAndScore<T>(
 	items: T[],
 	query: string,
 	getText: (item: T) => string,
 	limit = 5000,
+	frecencyMap?: Map<string, number>,
+	getFrecencyKey?: (item: T) => string,
 ): ScoredItem<T>[] {
+	const FRECENCY_WEIGHT = 5;
+
 	if (!query) {
-		return items.slice(0, limit).map((item) => ({
-			item,
-			score: 0,
-			indices: [],
-		}));
+		// No query — return all items, sorted by frecency if available
+		const result = items.slice(0, limit).map((item) => {
+			const fKey = getFrecencyKey ? getFrecencyKey(item) : getText(item);
+			const fBoost = frecencyMap?.get(fKey) ?? 0;
+			return { item, score: fBoost * FRECENCY_WEIGHT, indices: [] as number[] };
+		});
+		if (frecencyMap && frecencyMap.size > 0) {
+			result.sort((a, b) => b.score - a.score);
+		}
+		return result;
 	}
 
-	const lowerQuery = query.toLowerCase();
+	const tokens = parseQueryTokens(query);
+	const fuzzyTokens = tokens.filter((t) => t.type === "fuzzy");
+	const modifierTokens = tokens.filter((t) => t.type !== "fuzzy");
+	const fuzzyPart = fuzzyTokens.map((t) => t.text).join("");
+	const lowerFuzzy = fuzzyPart.toLowerCase();
+
 	const results: ScoredItem<T>[] = [];
 
-	// Pre-filter with fast subsequence check, then score matches
 	for (const item of items) {
 		const text = getText(item);
-		if (!isSubsequence(query, text)) continue;
+		const lowerText = text.toLowerCase();
 
-		const { score, indices } = computeBestMatch(lowerQuery, text);
-		if (score > -Infinity) {
-			results.push({ item, score, indices });
+		// Check modifier tokens first (fast reject)
+		if (!passesModifiers(lowerText, modifierTokens)) continue;
+
+		// Fuzzy scoring
+		if (fuzzyPart) {
+			if (!isSubsequence(fuzzyPart, text)) continue;
+			const { score, indices } = computeBestMatch(lowerFuzzy, text);
+			if (score > -Infinity) {
+				const fKey = getFrecencyKey ? getFrecencyKey(item) : text;
+				const fBoost = frecencyMap?.get(fKey) ?? 0;
+				results.push({ item, score: score + fBoost * FRECENCY_WEIGHT, indices });
+			}
+		} else {
+			// All modifiers passed, no fuzzy part — include with frecency score
+			const fKey = getFrecencyKey ? getFrecencyKey(item) : text;
+			const fBoost = frecencyMap?.get(fKey) ?? 0;
+			results.push({ item, score: fBoost * FRECENCY_WEIGHT, indices: [] });
 		}
 
 		if (results.length >= limit) break;
 	}
 
-	// Sort by score descending
 	results.sort((a, b) => b.score - a.score);
-
 	return results;
 }

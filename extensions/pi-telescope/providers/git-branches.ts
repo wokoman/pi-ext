@@ -1,10 +1,13 @@
 /**
  * Git Branches Provider
+ *
+ * Actions: checkout, copy name
  */
 
 import { execSync } from "node:child_process";
-import type { ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
+import { copyToClipboard } from "../clipboard.js";
 
 interface Branch {
 	name: string;
@@ -78,6 +81,36 @@ export function createGitBranchesProvider(cwd: string): TelescopeProvider<Branch
 
 		getPreview(item, maxLines) {
 			return branchPreview(item, cwd, maxLines);
+		},
+
+		getFrecencyKey(item) {
+			return item.name;
+		},
+
+		actions: [
+			{ key: "o", label: "Checkout", description: "Switch to this branch" },
+			{ key: "c", label: "Copy name", description: "Copy branch name to clipboard" },
+		],
+
+		async onAction(actionKey, items, ctx) {
+			const item = items[0];
+			if (!item) return;
+			const name = item.name.replace(/^remotes\/origin\//, "");
+
+			if (actionKey === "o") {
+				try {
+					execSync(`git checkout "${name}"`, {
+						cwd,
+						encoding: "utf-8",
+						timeout: 10_000,
+					});
+					ctx.ui.notify(`Switched to branch: ${name}`, "info");
+				} catch (err: any) {
+					ctx.ui.notify(`Checkout failed: ${err.message ?? err}`, "warning");
+				}
+			} else if (actionKey === "c") {
+				copyToClipboard(name);
+			}
 		},
 	};
 }

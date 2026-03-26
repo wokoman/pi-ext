@@ -4,8 +4,9 @@
  * Browse all available pi commands (extensions, skills, prompts).
  */
 
-import type { ExtensionAPI, ExtensionContext, Theme } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@mariozechner/pi-coding-agent";
 import type { TelescopeProvider } from "../types.js";
+import { copyToClipboard } from "../clipboard.js";
 
 interface CommandInfo {
 	name: string;
@@ -47,7 +48,7 @@ export function createCommandsProvider(pi: ExtensionAPI): TelescopeProvider<Comm
 			setTimeout(() => process.stdin.emit("data", "\r"), 0);
 		},
 
-		getPreview(item, maxLines) {
+		getPreview(item) {
 			const lines = [
 				`Command: /${item.name}`,
 				`Source: ${item.source}`,
@@ -56,6 +57,20 @@ export function createCommandsProvider(pi: ExtensionAPI): TelescopeProvider<Comm
 				item.description || "(no description)",
 			];
 			return lines;
+		},
+
+		getFrecencyKey(item) {
+			return item.name;
+		},
+
+		actions: [
+			{ key: "c", label: "Copy command", description: "Copy /command to clipboard" },
+		],
+
+		onAction(actionKey, items) {
+			if (actionKey === "c") {
+				copyToClipboard(items.map((i) => `/${i.name}`).join("\n"));
+			}
 		},
 	};
 }
