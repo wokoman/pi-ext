@@ -1,0 +1,21 @@
+{
+  "name": "github-dark",
+  "type": "dark",
+  "aine": {
+    "bg": "#0d1117",
+    "sidebar": "#010409",
+    "hover": "#161b22",
+    "active": "#1f2937",
+    "text": "#e6edf3",
+    "muted": "#7d8590",
+    "accent": "#58a6ff",
+    "border": "#30363d",
+    "add": "#3fb950",
+    "delete": "#f85149",
+    "modified": "#d29922",
+    "addBg": "rgba(63, 185, 80, 0.10)",
+    "deleteBg": "rgba(248, 81, 73, 0.10)",
+    "addBorder": "rgba(63, 185, 80, 0.30)",
+    "deleteBorder": "rgba(248, 81, 73, 0.30)"
+  }
+}
