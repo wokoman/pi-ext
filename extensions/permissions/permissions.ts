@@ -1,14 +1,14 @@
 /**
- * Permissions Extension — 4-mode system
+ * Permissions Extension — 3-mode system
  *
  * Modes:
  *   yolo      — All commands allowed without checks
  *   safe      — Permission rules active (ask for unknown bash commands)
- *   plan      — Plannotator planning mode
- *   read-only — No writes, bash restricted to safe read-only commands
+ *   read-only — No repo/home writes, built-in write/edit allowed only in /tmp,
+ *               bash restricted to safe read-only commands
  *
  * Commands:
- *   /mode [yolo|safe|plan|read-only]  — Switch mode
+ *   /mode [yolo|safe|read-only]  — Switch mode
  *
  * Settings:
  *   ~/.pi/agent/permissions.json       (global: mode + rules)
@@ -19,18 +19,26 @@
  *   First match wins. See rules.ts to add new permissions.
  */
 
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import type { BashRule, PermissionMode } from "./types.js";
 import { ALL_MODES, MODE_DESCRIPTIONS } from "./types.js";
 import { BUILTIN_RULES } from "./rules.js";
 import { CD_PREFIX_RE, findMatchingRule, isReadSafeBash } from "./matching.js";
+import {
+	PERMISSION_REQUEST_EVENT,
+	PERMISSION_RESOLVED_EVENT,
+	type PermissionRequestPayload,
+} from "./events.js";
 import { loadProjectRules, loadSettings, normalizeMode, saveSettings } from "./settings.js";
 
-// Re-export for consumers (e.g. custom-footer)
 export type { PermissionMode } from "./types.js";
 
-// ── The Single Permission Gate ─────────────────────────────────────────
+function isTmpPath(path: string, cwd: string): boolean {
+	const absolutePath = resolve(cwd, path);
+	return absolutePath === "/tmp" || absolutePath.startsWith("/tmp/");
+}
 
 /**
  * Evaluate whether a tool call should be allowed, blocked, or needs confirmation.
@@ -42,11 +50,19 @@ async function evaluateToolCall(
 	input: Record<string, unknown>,
 	mode: PermissionMode,
 	ctx: ExtensionContext,
+	notifyPermission?: {
+		onRequest: (payload: PermissionRequestPayload) => void;
+		onResolved: (payload: PermissionRequestPayload & { response: "allow" | "reject" }) => void;
+	},
 ): Promise<undefined | { block: true; reason: string }> {
-	// ── Read-only: block writes, restrict bash to safe commands ────
 	if (mode === "read-only") {
 		if (toolName === "write" || toolName === "edit") {
-			return { block: true, reason: "Read-only mode: file writes are blocked. Use /mode to change." };
+			const path = input.path as string;
+			if (isTmpPath(path, ctx.cwd)) return undefined;
+			return {
+				block: true,
+				reason: `Read-only mode: file writes are blocked outside /tmp. Use /mode to change.\nPath: ${path}`,
+			};
 		}
 		if (toolName === "bash") {
 			const command = input.command as string;
@@ -60,16 +76,13 @@ async function evaluateToolCall(
 		return undefined;
 	}
 
-	// ── Plan / yolo: no restrictions ──────────────────────────────
-	if (mode === "plan" || mode === "yolo") return undefined;
+	if (mode === "yolo") return undefined;
 
-	// ── Safe mode: evaluate rules (bash only) ─────────────────────
 	if (toolName !== "bash") return undefined;
 
 	const command = input.command as string;
 	const stripped = command.trim().replace(CD_PREFIX_RE, "").trim();
 
-	// Merge: project rules → global user rules → built-in rules
 	const settings = loadSettings();
 	const projectRules = loadProjectRules(ctx.cwd);
 	const allRules: BashRule[] = [...projectRules, ...(settings.rules ?? []), ...BUILTIN_RULES];
@@ -86,61 +99,40 @@ async function evaluateToolCall(
 			if (!ctx.hasUI) {
 				return { block: true, reason: "Command requires confirmation (no UI available)" };
 			}
+
+			const payload: PermissionRequestPayload = {
+				sessionId: ctx.sessionManager.getSessionId(),
+				cwd: ctx.cwd,
+				toolName,
+				input,
+			};
+
+			notifyPermission?.onRequest(payload);
+
 			const choice = await ctx.ui.select(
 				`⚠️  Permission required:\n\n  ${command}\n\nAllow? (Use /mode to switch modes)`,
 				["Yes", "No"],
 			);
 			if (choice !== "Yes") {
+				notifyPermission?.onResolved({ ...payload, response: "reject" });
 				ctx.abort();
 				return { block: true, reason: "Blocked by user" };
 			}
+			notifyPermission?.onResolved({ ...payload, response: "allow" });
 			return undefined;
 		}
 	}
 }
 
-// ── Extension ──────────────────────────────────────────────────────────
-
 let permissionMode: PermissionMode = normalizeMode(loadSettings().mode);
 
 export default function (pi: ExtensionAPI) {
-	/** Whether we activated plannotator (so we know to deactivate on mode switch). */
-	let plannotatorActivatedByUs = false;
-
-	function triggerPlannotator(ctx: ExtensionContext, entering: boolean): void {
-		// When entering plan mode, pass a timestamped path so plannotator
-		// skips the interactive file-name prompt.  When exiting (toggle off),
-		// no path is needed — plannotator just disables.
-		if (entering) {
-			const now = new Date();
-			const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-			const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-			ctx.ui.setEditorText(`/plannotator .plan/${ts}.md`);
-		} else {
-			ctx.ui.setEditorText("/plannotator");
-		}
-		setTimeout(() => process.stdin.emit("data", "\r"), 0);
-	}
-
 	function setMode(mode: PermissionMode, ctx: ExtensionContext): void {
-		const previousMode = permissionMode;
 		permissionMode = mode;
 		const current = loadSettings();
 		saveSettings({ ...current, mode });
 		pi.events.emit("mode:change", mode);
 		ctx.ui.notify(`Mode: ${mode.toUpperCase()} — ${MODE_DESCRIPTIONS[mode]}`);
-
-		// Auto-activate plannotator when entering plan mode
-		if (mode === "plan" && previousMode !== "plan") {
-			plannotatorActivatedByUs = true;
-			triggerPlannotator(ctx, true);
-		}
-
-		// Auto-deactivate plannotator when leaving plan mode (if we activated it)
-		if (mode !== "plan" && previousMode === "plan" && plannotatorActivatedByUs) {
-			plannotatorActivatedByUs = false;
-			triggerPlannotator(ctx, false);
-		}
 	}
 
 	async function modeHandler(args: string | undefined, ctx: ExtensionContext): Promise<void> {
@@ -160,10 +152,8 @@ export default function (pi: ExtensionAPI) {
 		if (selected) setMode(selected, ctx);
 	}
 
-	// ── Commands & Shortcuts ──
-
 	pi.registerCommand("mode", {
-		description: "Switch permission mode (yolo/safe/plan/read-only)",
+		description: "Switch permission mode (yolo/safe/read-only)",
 		getArgumentCompletions: (prefix: string) => {
 			const items = ALL_MODES.map((m) => ({
 				value: m,
@@ -180,15 +170,18 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => modeHandler(args, ctx),
 	});
 
-	// ── Session Start ──
-
 	pi.on("session_start", async (_event, _ctx) => {
 		pi.events.emit("mode:change", permissionMode);
 	});
 
-	// ── Tool Call Interception (single gate) ──
-
 	pi.on("tool_call", async (event, ctx) => {
-		return evaluateToolCall(event.toolName, event.input, permissionMode, ctx);
+		return evaluateToolCall(event.toolName, event.input, permissionMode, ctx, {
+			onRequest: (payload) => {
+				pi.events.emit(PERMISSION_REQUEST_EVENT, payload);
+			},
+			onResolved: (payload) => {
+				pi.events.emit(PERMISSION_RESOLVED_EVENT, payload);
+			},
+		});
 	});
 }

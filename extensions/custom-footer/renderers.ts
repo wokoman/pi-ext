@@ -7,6 +7,7 @@
 
 import type { PermissionMode } from "../permissions/permissions.js";
 import { visibleWidth } from "@mariozechner/pi-tui";
+import { THINKING_ROLES } from "../shared/thinking-colors.js";
 
 type ThemeFg = { fg: (role: any, text: string) => string; bold: (text: string) => string; inverse: (text: string) => string };
 
@@ -14,21 +15,12 @@ type ThemeFg = { fg: (role: any, text: string) => string; bold: (text: string) =
 
 /** Theme roles for permission mode pills. */
 const MODE_ROLES: Record<PermissionMode, string> = {
-	yolo:        "error",      // red
-	safe:        "success",    // green
-	plan:        "accent",     // mauve
-	"read-only": "mdHeading",  // blue
+	yolo: "error", // red
+	safe: "success", // green
+	"read-only": "mdHeading", // blue
 };
 
-/** Theme roles for thinking-level indicators. */
-const THINKING_ROLES: Record<string, string> = {
-	off:     "dim",
-	minimal: "dim",
-	low:     "success",    // green
-	medium:  "warning",    // yellow
-	high:    "bashMode",   // peach
-	xhigh:  "error",      // red
-};
+
 
 // ── Tokens ─────────────────────────────────────────────────────────────
 

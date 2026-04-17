@@ -2,9 +2,15 @@
   "name": "pi-ext",
   "version": "0.1.0",
   "dependencies": {
+    "@benvargas/pi-claude-code-use": "^1.0.1",
     "@mariozechner/pi-ai": "^0.62.0",
     "@mariozechner/pi-coding-agent": "^0.62.0",
-    "@mariozechner/pi-tui": "^0.62.0"
+    "@mariozechner/pi-tui": "^0.62.0",
+    "@sting8k/pi-vcc": "^0.3.5",
+    "@tintinweb/pi-tasks": "^0.4.2"
+  },
+  "optionalDependencies": {
+    "@ataraxy-labs/sem": "^0.3.21"
   },
   "description": "Personal collection of Pi extensions, themes, and skills.",
   "keywords": [
@@ -13,27 +19,32 @@
     "pi-coding-agent"
   ],
   "license": "MIT",
+  "scripts": {
+    "sem:evaluate": "node extensions/pi-sem/bin/sem-eval.mjs",
+    "test:pi-sem": "node --test extensions/pi-sem/core.test.mjs extensions/review/sem-guidance.test.mjs"
+  },
   "pi": {
     "extensions": [
       "./extensions/custom-footer/custom-footer.ts",
       "./extensions/review/review.ts",
       "./extensions/leader-key/index.ts",
-      "./extensions/session-switch/index.ts",
       "./extensions/permissions/permissions.ts",
       "./extensions/session-query/session-query.ts",
       "./extensions/ask-user-question/index.ts",
-      "./extensions/tool-pills/tool-pills.ts",
+      "./extensions/tool-pills/index.ts",
       "./extensions/cmux/index.ts",
       "./extensions/session-snap/index.ts",
       "./extensions/pi-telescope/index.ts",
-      "./extensions/aine/index.ts"
+      "./extensions/handoff/index.ts",
+      "./extensions/pi-sem/index.ts"
     ],
     "skills": [
       "./skills/commit",
       "./skills/github",
       "./skills/visit-webpage",
       "./skills/web-search",
-      "./skills/session-query"
+      "./skills/session-query",
+      "./skills/sem"
     ],
     "themes": [
       "./themes"

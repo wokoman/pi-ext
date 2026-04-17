@@ -61,7 +61,7 @@ function formatPreviewLines(
 		const gutter = isHighlighted
 			? theme.fg("accent", `${lineNum}│`)
 			: theme.fg("dim", `${lineNum}│`);
-		return `${gutter}${line}`;
+		return `${gutter}${expandTabs(line)}`;
 	});
 }
 
@@ -74,6 +74,11 @@ export function plainPreview(
 	const gutterWidth = String(lines.length).length;
 	return lines.map((line, i) => {
 		const lineNum = String(i + 1).padStart(gutterWidth);
-		return `${theme.fg("dim", `${lineNum}│`)}${line}`;
+		return `${theme.fg("dim", `${lineNum}│`)}${expandTabs(line)}`;
 	});
+}
+
+/** Replace tab characters with spaces to match pi-tui's tab width of 3. */
+function expandTabs(line: string): string {
+	return line.includes("\t") ? line.replace(/\t/g, "   ") : line;
 }

@@ -76,7 +76,15 @@ See the [full README](extensions/pi-web-access/README.md) for details.
 
 ### [Code Review](extensions/review/)
 
-`/review` command with multiple modes: review a GitHub PR (checks it out locally), diff against a base branch, review uncommitted changes, review a specific commit, or provide custom review instructions. Supports project-specific `REVIEW_GUIDELINES.md`. Derived from [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) (Apache 2.0).
+`/review` command with multiple modes: review a GitHub PR (checks it out locally), diff against a base branch, review uncommitted changes, review a specific commit, or provide custom review instructions. Supports project-specific `REVIEW_GUIDELINES.md`.
+
+When `pi-sem` is also loaded, `/review` now nudges the agent toward a semantic workflow:
+- `sem_diff` for one overview of changed entities
+- `sem_impact` for blast radius / affected tests on risky entities
+- `sem_context` for focused understanding of suspicious functions or classes
+- raw `git diff` / `read` for final line-level evidence
+
+Derived from [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) (Apache 2.0).
 
 ### [Todos](extensions/todos/)
 
@@ -85,6 +93,17 @@ File-based todo management stored in `.pi/todos/`. Each todo is a standalone mar
 ### [Context](extensions/context/)
 
 `/context` command showing what's loaded in the current session: extensions, skills, project context files (`AGENTS.md`/`CLAUDE.md`), context window usage, and session cost totals. Derived from [mitsuhiko/agent-stuff](https://github.com/mitsuhiko/agent-stuff) (Apache 2.0).
+
+### [pi-sem](extensions/pi-sem/)
+
+Semantic Git tooling for Pi powered by [sem](https://github.com/Ataraxy-Labs/sem). Exposes entity-aware tools like `sem_diff`, `sem_impact`, `sem_context`, `sem_log`, `sem_entities`, `sem_blame`, and `sem_eval` so the agent can reason about functions, classes, and config properties instead of raw line hunks.
+
+Includes a local evaluator to compare `sem diff` vs `git diff` on the same selection:
+
+```bash
+npm run sem:evaluate -- --staged
+npm run sem:evaluate -- --from origin/main --to HEAD
+```
 
 ### [Ghostty](extensions/ghostty/)
 
@@ -96,6 +115,7 @@ File-based todo management stored in `.pi/todos/`. Each todo is a standalone mar
 |-------|-------------|
 | [commit](skills/commit/) | Conventional Commits-style `git commit` — infers type, scope, and summary from the diff |
 | [github](skills/github/) | Recipes for the `gh` CLI — PR checks, CI runs, issue queries, JSON output |
+| [sem](skills/sem/) | Entity-aware change analysis workflow — prefer `sem_context` and `sem_impact`, use `sem_diff` selectively for summaries and reviews |
 
 ## Themes
 
@@ -110,6 +130,7 @@ Most extensions work out of the box. Notable config:
 - **Leader Key** — edit `extensions/leader-key/favourite-models.json` to set your favourite model presets
 - **Pi Web Access** — optionally configure API keys in `~/.pi/web-search.json` (see [README](extensions/pi-web-access/README.md#configuration))
 - **Todos** — set `PI_TODO_PATH` env var to change the storage directory (defaults to `.pi/todos`)
+- **pi-sem** — `npm install` should fetch the optional `@ataraxy-labs/sem` wrapper automatically; otherwise install `sem` globally with Homebrew or Cargo
 
 ## License
 

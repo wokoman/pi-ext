@@ -670,37 +670,25 @@ export async function openTelescope(
 			// ── Top border ──
 			lines.push(bdr(`╭${hLine("─", innerWidth)}╮`));
 
-			// ── Header ──
-			let headerContent: string;
-			if (state.mode === "provider-picker") {
-				headerContent = th.fg("accent", th.bold("🔀 Switch Provider"));
-			} else if (state.mode === "help") {
-				headerContent = th.fg("accent", th.bold("❓ Keybindings"));
-			} else if (state.mode === "action-picker") {
-				headerContent = `${th.fg("accent", th.bold("⚡ Actions"))}  ${th.fg("dim", currentProvider.name)}`;
-			} else {
-				const title = `${currentProvider.icon} ${currentProvider.name}`;
-				const count = state.loading
-					? th.fg("dim", "loading…")
-					: th.fg("dim", `${state.filtered.length}/${state.allItems.length}`);
-				const multi =
-					state.selectedKeys.size > 0
-						? th.fg("success", ` [${state.selectedKeys.size} sel]`)
-						: "";
-				const flashMsg = state.flashMessage
-					? "  " + th.fg("warning", state.flashMessage)
-					: "";
-				headerContent = `${th.fg("accent", th.bold(title))}  ${count}${multi}${flashMsg}`;
-			}
+			// ── Input row ──
+			const query =
+				state.mode !== "search" ? state.modeQuery : state.query;
+			const cursorPos =
+				state.mode !== "search"
+					? state.modeCursorPos
+					: state.cursorPos;
+			const promptChar = th.fg("accent", "> ");
+			const beforeCursor = query.slice(0, cursorPos);
+			const cursorChar = query[cursorPos] ?? " ";
+			const afterCursor = query.slice(cursorPos + 1);
+			const inputText = `${promptChar}${beforeCursor}\x1b[7m${cursorChar}\x1b[27m${afterCursor}`;
+			const inputContent =
+				" " + truncateToWidth(inputText, innerWidth - 2) + " ";
 			lines.push(
-				bdr("│") +
-					" " +
-					padRight(headerContent, innerWidth - 2) +
-					" " +
-					bdr("│"),
+				bdr("│") + padRight(inputContent, innerWidth) + bdr("│"),
 			);
 
-			// ── Separator (header → list) ──
+			// ── Separator (input → list) ──
 			if (hasPreview) {
 				lines.push(
 					bdr(
@@ -766,7 +754,7 @@ export async function openTelescope(
 					const previewIdx = state.previewScrollOffset + row;
 					let rightCell = "";
 					if (previewIdx < state.previewLines.length) {
-						rightCell = state.previewLines[previewIdx] ?? "";
+						rightCell = (state.previewLines[previewIdx] ?? "").replace(/\t/g, "   ");
 					}
 					rightCell =
 						" " + truncateToWidth(rightCell, previewWidth - 2) + " ";
@@ -789,7 +777,7 @@ export async function openTelescope(
 				}
 			}
 
-			// ── Separator (list → input) ──
+			// ── Separator (list → hints) ──
 			if (hasPreview) {
 				lines.push(
 					bdr(
@@ -799,27 +787,6 @@ export async function openTelescope(
 			} else {
 				lines.push(bdr(`├${hLine("─", innerWidth)}┤`));
 			}
-
-			// ── Input row ──
-			const query =
-				state.mode !== "search" ? state.modeQuery : state.query;
-			const cursorPos =
-				state.mode !== "search"
-					? state.modeCursorPos
-					: state.cursorPos;
-			const promptChar = th.fg("accent", "> ");
-			const beforeCursor = query.slice(0, cursorPos);
-			const cursorChar = query[cursorPos] ?? " ";
-			const afterCursor = query.slice(cursorPos + 1);
-			const inputText = `${promptChar}${beforeCursor}\x1b[7m${cursorChar}\x1b[27m${afterCursor}`;
-			const inputContent =
-				" " + truncateToWidth(inputText, innerWidth - 2) + " ";
-			lines.push(
-				bdr("│") + padRight(inputContent, innerWidth) + bdr("│"),
-			);
-
-			// ── Separator (input → hints) ──
-			lines.push(bdr(`├${hLine("─", innerWidth)}┤`));
 
 			// ── Hints row ──
 			const hintsContent = buildHints(th, innerWidth - 2, state.mode);
@@ -848,8 +815,8 @@ export async function openTelescope(
 		overlay: true,
 		overlayOptions: {
 			anchor: "top-center" as const,
-			offsetY: 3,
-			width: "90%",
+			offsetY: 1,
+			width: "95%",
 			minWidth: 80,
 			maxHeight: "85%",
 		},

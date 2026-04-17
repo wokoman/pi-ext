@@ -31,6 +31,7 @@ import { DynamicBorder, BorderedLoader } from "@mariozechner/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { buildSemReviewGuidance, getSemToolAvailability } from "./sem-guidance.mjs";
 
 // State to track fresh session review (where we branched from).
 // Module-level state means only one review can be active at a time.
@@ -920,11 +921,16 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		}
 
 		const prompt = await buildReviewPrompt(pi, target);
+		const semReviewInstructions = await buildSemReviewInstructions(target);
 		const hint = getUserFacingHint(target);
 		const projectGuidelines = await loadProjectReviewGuidelines(ctx.cwd);
 
 		// Combine the review rubric with the specific prompt
 		let fullPrompt = `${REVIEW_RUBRIC}\n\n---\n\nPlease perform a code review with the following focus:\n\n${prompt}`;
+
+		if (semReviewInstructions) {
+			fullPrompt += `\n\n${semReviewInstructions}`;
+		}
 
 		if (projectGuidelines) {
 			fullPrompt += `\n\nThis project has additional instructions for code reviews:\n\n${projectGuidelines}`;
@@ -1029,6 +1035,27 @@ export default function reviewExtension(pi: ExtensionAPI) {
 			baseBranch: prInfo.baseBranch,
 			title: prInfo.title,
 		};
+	}
+
+	async function buildSemReviewInstructions(target: ReviewTarget): Promise<string | null> {
+		const tools = getSemToolAvailability(pi.getActiveTools());
+		if (!tools.any) return null;
+
+		switch (target.type) {
+			case "baseBranch": {
+				const mergeBase = await getMergeBase(pi, target.branch);
+				return buildSemReviewGuidance({ type: "baseBranch", branch: target.branch, mergeBase }, tools);
+			}
+			case "pullRequest": {
+				const mergeBase = await getMergeBase(pi, target.baseBranch);
+				return buildSemReviewGuidance(
+					{ type: "pullRequest", prNumber: target.prNumber, baseBranch: target.baseBranch, title: target.title, mergeBase },
+					tools,
+				);
+			}
+			default:
+				return buildSemReviewGuidance(target, tools);
+		}
 	}
 
 	// Register the /review command

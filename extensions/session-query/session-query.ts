@@ -4,6 +4,15 @@
  * Provides a tool the model can use to query past sessions for context,
  * decisions, code changes, or other information.
  *
+ * Uses an uncapped VCC summary by default (~9K tokens) which preserves ALL
+ * user messages and assistant reasoning. Falls back to full serialized
+ * conversation (~80K tokens) via `detailed: true` for queries that need
+ * exact file contents or tool output.
+ *
+ * Standard vccCompile's capBrief(120 lines) loses the first half of longer
+ * conversations. This extension bypasses that cap by using vcc's building
+ * blocks (normalize → filterNoise → buildSections) directly.
+ *
  * Works with handoff: when a handoff prompt includes "Parent session: <path>",
  * the model can use this tool to look up details from that session.
  */
@@ -19,15 +28,63 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { normalize } from "@sting8k/pi-vcc/src/core/normalize";
+import { filterNoise } from "@sting8k/pi-vcc/src/core/filter-noise";
+import { buildSections } from "@sting8k/pi-vcc/src/core/build-sections";
+import { redact } from "@sting8k/pi-vcc/src/core/redact";
 
-const QUERY_SYSTEM_PROMPT = `You are a session context assistant. Given the conversation history from a pi coding session and a question, provide a concise answer based on the session contents.
+const QUERY_SYSTEM_PROMPT = `You are a session context assistant. Given a session transcript and a question, provide a concise answer based on the session contents.
 
 Focus on:
-- Specific facts, decisions, and outcomes
+- Specific decisions, agreements, and the chosen approach
+- What was agreed, what was explicitly rejected, what constraints were set
 - File paths and code changes mentioned
 - Key context the user is asking about
 
-Be concise and direct. If the information isn't in the session, say so.`;
+Be concise and direct. If the information isn't in the transcript, say so.
+If the question asks about exact file contents, specific error messages, or precise tool output, note that these details may not be in the transcript and suggest retrying with detailed=true.`;
+
+// Cache uncapped summaries per session path.
+const summaryCache = new Map<string, string>();
+
+/**
+ * Build an uncapped VCC summary: uses vcc's normalize/filterNoise/buildSections
+ * but skips capBrief so the full brief transcript is preserved.
+ * ~9K tokens vs ~80K for full serialization (8.7x smaller, same accuracy for
+ * decisions/agreements, only loses tool result contents).
+ */
+function buildUncappedSummary(llmMessages: Message[]): string {
+	const blocks = filterNoise(normalize(llmMessages));
+	const data = buildSections({ blocks });
+
+	const section = (title: string, items: string[]): string => {
+		if (items.length === 0) return "";
+		return `[${title}]\n${items.map((i) => `- ${i}`).join("\n")}`;
+	};
+
+	const headerParts = [
+		section("Session Goal", data.sessionGoal),
+		section("Files And Changes", data.filesAndChanges),
+		section("Outstanding Context", data.outstandingContext),
+		section("User Preferences", data.userPreferences),
+	].filter(Boolean);
+
+	const parts: string[] = [];
+	if (headerParts.length > 0) parts.push(headerParts.join("\n\n"));
+	if (data.briefTranscript) parts.push(data.briefTranscript);
+
+	if (parts.length === 0) return "";
+	return redact(parts.join("\n\n---\n\n"));
+}
+
+function getOrBuildSummary(sessionPath: string, llmMessages: Message[]): string {
+	const cached = summaryCache.get(sessionPath);
+	if (cached) return cached;
+
+	const summary = buildUncappedSummary(llmMessages);
+	if (summary) summaryCache.set(sessionPath, summary);
+	return summary;
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
@@ -41,19 +98,16 @@ export default function (pi: ExtensionAPI) {
 			const firstContent = result.content[0];
 			if (firstContent && firstContent.type === "text") {
 				const text = firstContent.text;
-				// Parse: **Query:** question\n\n---\n\nanswer
 				const match = text.match(/\*\*Query:\*\* (.+?)\n\n---\n\n([\s\S]+)/);
 				
 				if (match) {
 					const [, query, answer] = match;
 					container.addChild(new Text(theme.bold("Query: ") + theme.fg("accent", query), 0, 0));
 					container.addChild(new Spacer(1));
-					// Render the answer as markdown
 					container.addChild(new Markdown(answer.trim(), 0, 0, getMarkdownTheme(), {
 						color: (text: string) => theme.fg("toolOutput", text),
 					}));
 				} else {
-					// Fallback for other formats (errors, etc)
 					container.addChild(new Text(theme.fg("toolOutput", text), 0, 0));
 				}
 			}
@@ -67,23 +121,23 @@ export default function (pi: ExtensionAPI) {
 			question: Type.String({
 				description: "What you want to know about that session (e.g., 'What files were modified?' or 'What approach was chosen?')",
 			}),
+			detailed: Type.Optional(Type.Boolean({
+				description: "Use full serialized conversation instead of uncapped summary. Set true only when you need exact file contents, specific error messages, or precise tool output that isn't in the transcript. Much slower and more expensive (~80K vs ~9K tokens).",
+			})),
 		}),
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const { sessionPath, question } = params;
+			const { sessionPath, question, detailed } = params;
 
-			// Helper for error returns
 			const errorResult = (text: string) => ({
 				content: [{ type: "text" as const, text }],
 				details: { error: true },
 			});
 
-			// Validate session path
 			if (!sessionPath.endsWith(".jsonl")) {
 				return errorResult(`Error: Invalid session path. Expected a .jsonl file, got: ${sessionPath}`);
 			}
 
-			// Check if file exists
 			try {
 				const fs = await import("node:fs");
 				if (!fs.existsSync(sessionPath)) {
@@ -94,16 +148,10 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			onUpdate?.({
-				content: [
-					{
-						type: "text",
-						text: `Query: ${question}`,
-					},
-				],
-				details: { status: "loading", question },
+				content: [{ type: "text", text: `Query${detailed ? " (detailed)" : ""}: ${question}` }],
+				details: { status: "loading", question, detailed: !!detailed },
 			});
 
-			// Load the session
 			let sessionManager: SessionManager;
 			try {
 				sessionManager = SessionManager.open(sessionPath);
@@ -111,7 +159,6 @@ export default function (pi: ExtensionAPI) {
 				return errorResult(`Error loading session: ${err}`);
 			}
 
-			// Get conversation from the session
 			const branch = sessionManager.getBranch();
 			const messages = branch
 				.filter((entry): entry is SessionEntry & { type: "message" } => entry.type === "message")
@@ -124,37 +171,42 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// Serialize the conversation
 			const llmMessages = convertToLlm(messages);
-			const conversationText = serializeConversation(llmMessages);
 
-			// Determine the model to use: prefer the queried session's own model,
-			// fall back to the current session's model.
-			let queryModel = ctx.model;
-			const modelChanges = branch.filter(
-				(entry): entry is SessionEntry & { type: "model_change" } => entry.type === "model_change",
-			);
-			if (modelChanges.length > 0) {
-				const lastChange = modelChanges[modelChanges.length - 1]!;
-				const sessionModel = ctx.modelRegistry.find(lastChange.provider, lastChange.modelId);
-				if (sessionModel) {
-					queryModel = sessionModel;
+			// Default: uncapped vcc summary (~9K tokens, keeps all user+assistant messages)
+			// Detailed: full serialized conversation (~80K tokens, includes tool results)
+			let contextText: string;
+			let contextLabel: string;
+			if (detailed) {
+				contextText = serializeConversation(llmMessages);
+				contextLabel = "Full Session Conversation";
+			} else {
+				contextText = getOrBuildSummary(sessionPath, llmMessages);
+				contextLabel = "Session Transcript";
+				if (!contextText) {
+					contextText = serializeConversation(llmMessages);
+					contextLabel = "Full Session Conversation";
 				}
 			}
 
+			// Always use the current session's model — it's available and the user chose it.
+			const queryModel = ctx.model;
 			if (!queryModel) {
 				return errorResult("Error: No model available to analyze the session.");
 			}
 
 			try {
-				const apiKey = await ctx.modelRegistry.getApiKey(queryModel);
+				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(queryModel);
+				if (!auth.ok) {
+					return errorResult(`Error querying session: ${auth.error}`);
+				}
 
 				const userMessage: Message = {
 					role: "user",
 					content: [
 						{
 							type: "text",
-							text: `## Session Conversation\n\n${conversationText}\n\n## Question\n\n${question}`,
+							text: `## ${contextLabel}\n\n${contextText}\n\n## Question\n\n${question}`,
 						},
 					],
 					timestamp: Date.now(),
@@ -163,7 +215,11 @@ export default function (pi: ExtensionAPI) {
 				const response = await complete(
 					queryModel,
 					{ systemPrompt: QUERY_SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey, signal },
+					{
+						apiKey: auth.apiKey,
+						headers: auth.headers,
+						signal,
+					},
 				);
 
 				if (response.stopReason === "aborted") {
@@ -183,6 +239,7 @@ export default function (pi: ExtensionAPI) {
 					details: {
 						sessionPath,
 						question,
+						detailed: !!detailed,
 						messageCount: messages.length,
 					},
 				};

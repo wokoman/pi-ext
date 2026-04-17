@@ -1,7 +1,7 @@
 /**
  * Leader Key Extension
  *
- * Press Ctrl+Space to open a floating command palette showing all available
+ * Press Ctrl+X to open a floating command palette showing all available
  * actions organised into groups (like Vim's which-key or Emacs' leader key).
  *
  * Each group has a single-character chord key. Press the chord to see the
@@ -21,160 +21,50 @@ import type {
 	ExtensionContext,
 	Theme,
 } from "@mariozechner/pi-coding-agent";
-import type { ThinkingLevel } from "@mariozechner/pi-agent-core";
 import { matchesKey, parseKey, Key } from "@mariozechner/pi-tui";
-import { runModelSwitcher, runThinkingPicker, searchableSelect } from "./model-switcher";
-import { runFavouriteModels } from "./favourite-models";
-import { runSessionSwitch } from "../session-switch/index";
+import { searchableSelect } from "./model-switcher.js";
+import { runFavouriteModels } from "./favourite-models.js";
 import { OverlayFrame } from "../shared/overlay.js";
-
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface ActionItem {
-	key: string; // single character shortcut
-	label: string;
-	description?: string;
-	action: (ctx: ExtensionContext) => void | Promise<void>;
-}
-
-interface ActionGroup {
-	key: string; // chord key to open this group
-	label: string;
-	items: ActionItem[];
-}
-
-/** Top-level entry: either a group (chord → submenu) or a direct action */
-type TopLevelEntry =
-	| { type: "group"; group: ActionGroup }
-	| { type: "action"; key: string; label: string; description?: string; action: (ctx: ExtensionContext) => void | Promise<void> };
+import { copyToClipboard } from "../pi-telescope/clipboard.js";
+import type { ActionItem, ActionGroup, TopLevelEntry } from "./types.js";
+import { buildSessionEntries } from "./session-actions.js";
+import { buildLabelEntries } from "./label-actions.js";
+import { registerBridgeCommands } from "./context-helpers.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Build top-level entries
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-
-
 function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] {
 	const entries: TopLevelEntry[] = [];
 
 	// ── Session ─────────────────────────────────────────────────────────
-	entries.push({
-		type: "group",
-		group: {
-			key: "s",
-			label: "Session",
-			items: [
-				{
-					key: "n",
-					label: "New session",
-					description: "start fresh",
-					action: (ctx) => {
-						ctx.ui.setEditorText("/new");
-						setTimeout(() => process.stdin.emit("data", "\r"), 0);
-					},
-				},
-				{
-					key: "r",
-					label: "Resume session",
-					description: "/resume",
-					action: (ctx) => {
-						ctx.ui.setEditorText("/resume");
-						setTimeout(() => process.stdin.emit("data", "\r"), 0);
-					},
-				},
-				{
-					key: "s",
-					label: "Switch session",
-					description: "split panel picker",
-					action: (ctx) => runSessionSwitch(pi, ctx),
-				},
-				{
-					key: "t",
-					label: "Session tree",
-					description: "/tree",
-					action: (ctx) => {
-						ctx.ui.setEditorText("/tree");
-						setTimeout(() => process.stdin.emit("data", "\r"), 0);
-					},
-				},
-				{
-					key: "f",
-					label: "Fork session",
-					description: "/fork",
-					action: (ctx) => {
-						ctx.ui.setEditorText("/fork");
-						setTimeout(() => process.stdin.emit("data", "\r"), 0);
-					},
-				},
-				{
-					key: "p",
-					label: "Split-fork",
-					description: "fork into cmux split pane",
-					action: (ctx) => {
-						ctx.ui.setEditorText("/split-fork");
-						setTimeout(() => process.stdin.emit("data", "\r"), 0);
-					},
-				},
-				{
-					key: "c",
-					label: "Compact context",
-					description: "compact now",
-					action: (ctx) => {
-						ctx.compact({});
-						ctx.ui.notify("Compaction started", "info");
-					},
-				},
-			],
-		},
-	});
+	entries.push(buildSessionEntries(pi));
 
-	// ── Model (direct action → opens model switcher wizard) ─────────────
-	const currentModel = ctx.model;
+	// ── Labels ──────────────────────────────────────────────────────────
+	entries.push(buildLabelEntries(pi));
+
+	// ── Favourite models ────────────────────────────────────────────────
 	entries.push({
 		type: "action",
 		key: "m",
-		label: "Model",
-		description: currentModel ? `${currentModel.provider}/${currentModel.id}` : "switch model",
-		action: (ctx) => runModelSwitcher(pi, ctx),
-	});
-
-	// ── Favourite models (direct action → quick-switch picker) ──────────
-	entries.push({
-		type: "action",
-		key: "f",
 		label: "Favourites",
 		description: "quick-switch favourite models",
 		action: (ctx) => runFavouriteModels(pi, ctx),
 	});
 
-	// ── Thinking (direct action → opens thinking level picker) ──────────
-	const currentThinking = pi.getThinkingLevel();
-	entries.push({
-		type: "action",
-		key: "t",
-		label: "Thinking",
-		description: `current: ${currentThinking}`,
-		action: (ctx) => runThinkingPicker(pi, ctx),
-	});
-
-	// ── Permissions mode (direct action → overlay picker) ───────────────
+	// ── Permissions mode ────────────────────────────────────────────────
 	entries.push({
 		type: "action",
 		key: "p",
 		label: "Permissions",
 		description: "switch permission mode",
 		action: async (ctx) => {
-			const ALL_MODES = ["yolo", "safe", "plan", "read-only"] as const;
+			const ALL_MODES = ["yolo", "safe", "read-only"] as const;
 			const MODE_DESCRIPTIONS: Record<string, string> = {
 				yolo: "all commands allowed, no checks",
 				safe: "permission rules active",
-				plan: "plannotator planning mode",
-				"read-only": "read-only, no writes allowed",
+				"read-only": "read-only, no writes except /tmp",
 			};
 
 			const items = ALL_MODES.map((m) => ({
@@ -200,12 +90,12 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 	const commands = pi.getCommands();
 	const extCommands = commands.filter((c) => c.source === "extension");
 
-	// Filter out commands that are already represented in built-in entries
 	const builtinCommandNames = new Set([
 		"new", "resume", "tree", "fork", "compact",
 		"model", "thinking", "tools", "reload",
 		"switch", "lk", "leader-key",
 		"mode", "permissions",
+		"lk-navigate", "lk-switch", // internal bridge commands
 	]);
 
 	const customCommands = extCommands.filter((c) => !builtinCommandNames.has(c.name));
@@ -236,7 +126,7 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		});
 	}
 
-	// ── Skills (direct action → searchable picker) ─────────────────────
+	// ── Skills ──────────────────────────────────────────────────────────
 	const skillCommands = commands.filter((c) => c.source === "skill");
 
 	if (skillCommands.length > 0) {
@@ -266,7 +156,7 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		});
 	}
 
-	// ── Exit ─────────────────────────────────────────────────────────────
+	// ── Review / Annotate ───────────────────────────────────────────────
 	entries.push({
 		type: "action",
 		key: "r",
@@ -289,6 +179,42 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		},
 	});
 
+	// ── Copy last response ──────────────────────────────────────────────
+	entries.push({
+		type: "action",
+		key: "y",
+		label: "Copy last response",
+		description: "copy assistant message to clipboard",
+		action: (ctx: ExtensionContext) => {
+			const entries = ctx.sessionManager.getEntries();
+			for (let i = entries.length - 1; i >= 0; i--) {
+				const e = entries[i];
+				if (e.type === "message" && (e.message as any).role === "assistant") {
+					const content = (e.message as any).content;
+					const textParts: string[] = [];
+					if (Array.isArray(content)) {
+						for (const block of content) {
+							if (block.type === "text" && block.text) textParts.push(block.text);
+						}
+					}
+					const text = textParts.join("\n");
+					if (text) {
+						if (copyToClipboard(text)) {
+							ctx.ui.notify(`Copied (${text.length} chars)`, "info");
+						} else {
+							ctx.ui.notify("Clipboard copy failed", "error");
+						}
+					} else {
+						ctx.ui.notify("Last response has no text content", "info");
+					}
+					return;
+				}
+			}
+			ctx.ui.notify("No assistant message found", "info");
+		},
+	});
+
+	// ── Exit ─────────────────────────────────────────────────────────────
 	entries.push({
 		type: "action",
 		key: "q",
@@ -520,6 +446,9 @@ class LeaderKeyOverlay {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function leaderKeyExtension(pi: ExtensionAPI) {
+	// Register internal commands that bridge shortcut→command context
+	registerBridgeCommands(pi);
+
 	async function openLeaderKey(ctx: ExtensionContext) {
 		if (!ctx.hasUI) return;
 
@@ -557,21 +486,6 @@ export default function leaderKeyExtension(pi: ExtensionAPI) {
 		}
 	}
 
-	// ── Model-switcher commands (previously standalone extension) ────────
-	pi.registerCommand("switch", {
-		description: "Switch model (provider → model → thinking level)",
-		handler: async (_args, ctx) => {
-			await runModelSwitcher(pi, ctx);
-		},
-	});
-
-	pi.registerShortcut(Key.ctrlShift("m"), {
-		description: "Switch model (provider → model → thinking level)",
-		handler: async (ctx) => {
-			await runModelSwitcher(pi, ctx);
-		},
-	});
-
 	// Register as a command
 	pi.registerCommand("lk", {
 		description: "Open Leader Key palette",
@@ -580,8 +494,8 @@ export default function leaderKeyExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Register shortcut: Ctrl+Space
-	pi.registerShortcut(Key.ctrl("space"), {
+	// Register shortcut: Ctrl+X
+	pi.registerShortcut(Key.ctrl("x"), {
 		description: "Open Leader Key",
 		handler: async (ctx) => {
 			await openLeaderKey(ctx);

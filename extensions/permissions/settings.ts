@@ -45,6 +45,7 @@ export function loadProjectRules(cwd: string): BashRule[] {
 export function normalizeMode(raw: string | undefined): PermissionMode {
 	if (raw === "enabled") return "safe";
 	if (raw === "read") return "read-only"; // backward compat
-	if (raw === "yolo" || raw === "safe" || raw === "plan" || raw === "read-only") return raw;
+	if (raw === "plan") return "safe";
+	if (raw === "yolo" || raw === "safe" || raw === "read-only") return raw;
 	return "safe";
 }

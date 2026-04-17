@@ -1,14 +1,13 @@
 /** Shared types for the permissions extension. */
 
-export type PermissionMode = "yolo" | "safe" | "plan" | "read-only";
+export type PermissionMode = "yolo" | "safe" | "read-only";
 
-export const ALL_MODES: PermissionMode[] = ["yolo", "safe", "plan", "read-only"];
+export const ALL_MODES: PermissionMode[] = ["yolo", "safe", "read-only"];
 
 export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
 	yolo: "All commands allowed, no checks",
 	safe: "Permission rules active",
-	plan: "Plannotator planning mode",
-	"read-only": "Read-only, no writes allowed",
+	"read-only": "Read-only, no writes except /tmp",
 };
 
 /**

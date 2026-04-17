@@ -15,7 +15,7 @@
  *   - Footer with keybinding hints
  *
  * Keybindings:
- *   Ctrl+X             → open files finder
+ *   Ctrl+Space          → open files finder
  *
  * Commands:
  *   /telescope [name]  → open specific provider
@@ -26,10 +26,14 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { CustomEditor } from "@mariozechner/pi-coding-agent";
+import type { AutocompleteItem, AutocompleteProvider } from "@mariozechner/pi-tui";
 import type { TelescopeProvider } from "./types.js";
 import { openTelescope } from "./telescope.js";
+import { filterAndScore } from "./scoring.js";
+import { getFrecencyMap } from "./frecency.js";
 
-import { createFilesProvider } from "./providers/files.js";
+import { createFilesProvider, listFiles } from "./providers/files.js";
 
 import { createGitBranchesProvider } from "./providers/git-branches.js";
 import { createGitLogProvider } from "./providers/git-log.js";
@@ -86,8 +90,171 @@ async function runTelescope(
 	});
 }
 
+// ---------------------------------------------------------------------------
+// @ mention autocomplete replacement
+// ---------------------------------------------------------------------------
+
+const MENTION_MAX_RESULTS = 20;
+
+/** Cache of file listings per cwd */
+let cachedFiles: string[] = [];
+let cachedCwd: string | null = null;
+
+function ensureFileCache(cwd: string): string[] {
+	if (cachedCwd !== cwd) {
+		cachedFiles = listFiles(cwd);
+		cachedCwd = cwd;
+	}
+	return cachedFiles;
+}
+
+/** Invalidate file cache (called on cwd change) */
+function invalidateFileCache(): void {
+	cachedFiles = [];
+	cachedCwd = null;
+}
+
+/** Extract the @-prefix from text before cursor, or null if not in an @ context */
+function extractAtPrefix(textBeforeCursor: string): string | null {
+	const match = textBeforeCursor.match(/(?:^|[ \t])(@(?:"[^"]*|[^\s]*))$/);
+	return match?.[1] ?? null;
+}
+
+/** Parse the raw query and whether it's a quoted @"..." prefix */
+function parseAtPrefix(prefix: string): { raw: string; quoted: boolean } {
+	if (prefix.startsWith('@"')) {
+		return { raw: prefix.slice(2), quoted: true };
+	}
+	return { raw: prefix.slice(1), quoted: false };
+}
+
+/** Build the completion value with proper quoting for paths with spaces */
+function buildAtValue(path: string, quotedPrefix: boolean): string {
+	if (quotedPrefix || path.includes(" ")) {
+		return `@"${path}"`;
+	}
+	return `@${path}`;
+}
+
+/**
+ * Autocomplete provider that intercepts @ mentions and uses telescope's
+ * fuzzy scoring engine to find files, delegating everything else to the
+ * built-in provider.
+ */
+class TelescopeAtMentionProvider implements AutocompleteProvider {
+	constructor(
+		private base: AutocompleteProvider,
+		private cwd: string,
+	) {}
+
+	async getSuggestions(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		options: { signal: AbortSignal; force?: boolean },
+	): Promise<{ items: AutocompleteItem[]; prefix: string } | null> {
+		const currentLine = lines[cursorLine] || "";
+		const textBeforeCursor = currentLine.slice(0, cursorCol);
+		const atPrefix = extractAtPrefix(textBeforeCursor);
+
+		if (!atPrefix) {
+			return this.base.getSuggestions(lines, cursorLine, cursorCol, options);
+		}
+
+		const { raw, quoted } = parseAtPrefix(atPrefix);
+
+		try {
+			const files = ensureFileCache(this.cwd);
+			const frecency = getFrecencyMap("files");
+			const scored = filterAndScore(
+				files,
+				raw,
+				(f) => f,
+				MENTION_MAX_RESULTS,
+				frecency,
+			);
+
+			if (scored.length === 0) {
+				return this.base.getSuggestions(lines, cursorLine, cursorCol, options);
+			}
+
+			const items: AutocompleteItem[] = scored.map((s) => {
+				const path = s.item;
+				const fileName = path.includes("/")
+					? path.slice(path.lastIndexOf("/") + 1)
+					: path;
+				return {
+					value: buildAtValue(path, quoted),
+					label: fileName,
+					description: path,
+				};
+			});
+
+			return { items, prefix: atPrefix };
+		} catch {
+			// Fall back to built-in on any error
+			return this.base.getSuggestions(lines, cursorLine, cursorCol, options);
+		}
+	}
+
+	applyCompletion(
+		lines: string[],
+		cursorLine: number,
+		cursorCol: number,
+		item: AutocompleteItem,
+		prefix: string,
+	) {
+		return this.base.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+	}
+}
+
+/**
+ * Custom editor that wraps the autocomplete provider to inject
+ * telescope-powered @ mention completions.
+ */
+class TelescopeEditor extends CustomEditor {
+	constructor(
+		tui: any,
+		theme: any,
+		keybindings: any,
+		private cwd: string,
+	) {
+		super(tui, theme, keybindings);
+	}
+
+	override setAutocompleteProvider(provider: AutocompleteProvider): void {
+		super.setAutocompleteProvider(
+			new TelescopeAtMentionProvider(provider, this.cwd),
+		);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Extension
+// ---------------------------------------------------------------------------
+
 export default function (pi: ExtensionAPI) {
-	pi.registerShortcut("ctrl+x", {
+	// Register custom editor with telescope @ mentions
+	pi.on("session_start", async (_event, ctx) => {
+		try {
+			const cwd = ctx.cwd;
+			invalidateFileCache();
+			ensureFileCache(cwd);
+			ctx.ui.setEditorComponent((tui, theme, keybindings) =>
+				new TelescopeEditor(tui, theme, keybindings, cwd),
+			);
+		} catch (e: unknown) {
+			const msg = e instanceof Error ? e.message : String(e);
+			ctx.ui.notify(`Telescope @ init failed: ${msg}`, "error");
+		}
+	});
+
+	pi.on("session_shutdown", async (_event, ctx) => {
+		ctx.ui.setEditorComponent(undefined);
+		invalidateFileCache();
+	});
+
+	pi.registerShortcut("ctrl+space", {
 		description: "Open Telescope fuzzy finder (files)",
 		handler: (ctx) => runTelescope(pi, ctx, "files"),
 	});

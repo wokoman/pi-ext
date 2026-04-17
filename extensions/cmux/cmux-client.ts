@@ -89,8 +89,54 @@ export class CmuxClient {
     }
   }
 
+  /** Default timeouts by method category (ms). */
+  private static readonly TIMEOUT_FAST = 5_000;    // metadata queries
+  private static readonly TIMEOUT_NORMAL = 15_000;  // interactions, snapshots
+  private static readonly TIMEOUT_NAV = 30_000;     // navigation, page loads
+
+  /** Determine timeout for a given method. */
+  private timeoutFor(method: string): number {
+    // Fast: pure metadata, no page interaction needed
+    if (method.startsWith("browser.tab.") ||
+        method === "browser.url.get" ||
+        method.startsWith("browser.cookies.") ||
+        method.startsWith("browser.storage.") ||
+        method === "browser.console.list" ||
+        method === "browser.errors.list" ||
+        method === "browser.network.requests" ||
+        method.startsWith("browser.is.") ||
+        method.startsWith("browser.find.") ||
+        method === "browser.get.title") {
+      return CmuxClient.TIMEOUT_FAST;
+    }
+    // Slow: page loads
+    if (method === "browser.navigate" ||
+        method === "browser.open_split" ||
+        method === "browser.reload" ||
+        method === "browser.back" ||
+        method === "browser.forward" ||
+        method === "browser.wait" ||
+        method === "browser.download.wait") {
+      return CmuxClient.TIMEOUT_NAV;
+    }
+    // Everything else: normal
+    return CmuxClient.TIMEOUT_NORMAL;
+  }
+
+  /** Consecutive timeout counter for circuit-breaker logic. */
+  private consecutiveTimeouts = 0;
+  private static readonly CIRCUIT_BREAKER_THRESHOLD = 3;
+
   /** Send a v2 JSON request. Returns the result or null on failure. */
-  async request(method: string, params?: Record<string, any>): Promise<any | null> {
+  async request(method: string, params?: Record<string, any>, timeoutOverride?: number): Promise<any | null> {
+    // Circuit breaker: if we've had too many consecutive timeouts, fail fast
+    // (but allow tab_list / url.get through — they're diagnostic)
+    if (this.consecutiveTimeouts >= CmuxClient.CIRCUIT_BREAKER_THRESHOLD &&
+        !method.startsWith("browser.tab.") && method !== "browser.url.get") {
+      if (this.verbose) console.error("[pi-cmux] circuit breaker open, skipping:", method);
+      return null;
+    }
+
     // Auto-reconnect
     if (!this.isConnected()) {
       const ok = await this.connect();
@@ -99,20 +145,23 @@ export class CmuxClient {
 
     const id = crypto.randomUUID();
     const payload = JSON.stringify({ id, method, params: params ?? {} });
+    const timeout = timeoutOverride ?? this.timeoutFor(method);
 
-    if (this.verbose) console.error("[pi-cmux] ->", payload);
+    if (this.verbose) console.error("[pi-cmux] ->", payload, `(timeout: ${timeout}ms)`);
 
     return new Promise<any | null>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        if (this.verbose) console.error("[pi-cmux] request timeout:", method);
+        this.consecutiveTimeouts++;
+        if (this.verbose) console.error("[pi-cmux] request timeout:", method, `(consecutive: ${this.consecutiveTimeouts})`);
         resolve(null);
-      }, 15_000);
+      }, timeout);
 
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
           this.pending.delete(id);
+          this.consecutiveTimeouts = 0; // reset circuit breaker on success
           resolve(value);
         },
         reject: (reason) => {
@@ -171,6 +220,25 @@ export class CmuxClient {
         resolve(null);
       }
     });
+  }
+
+  /**
+   * Send multiple requests in parallel over the same socket.
+   * All requests are written immediately (pipelined) and resolved concurrently.
+   * Returns results in the same order as the input.
+   */
+  async parallel(requests: Array<{ method: string; params?: Record<string, any> }>): Promise<Array<any | null>> {
+    return Promise.all(requests.map((r) => this.request(r.method, r.params)));
+  }
+
+  /** Reset the circuit breaker (e.g. after recovery via tab_new). */
+  resetCircuitBreaker(): void {
+    this.consecutiveTimeouts = 0;
+  }
+
+  /** True if the circuit breaker is currently open (too many consecutive timeouts). */
+  get circuitBreakerOpen(): boolean {
+    return this.consecutiveTimeouts >= CmuxClient.CIRCUIT_BREAKER_THRESHOLD;
   }
 
   /** Close the connection. */

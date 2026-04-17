@@ -22,7 +22,7 @@ function hasBinary(name: string): boolean {
 
 const useFd = hasBinary("fd");
 
-function listFiles(cwd: string): string[] {
+export function listFiles(cwd: string): string[] {
 	try {
 		const cmd = useFd
 			? "fd --type f --hidden --follow --exclude .git --exclude node_modules --exclude .venv --exclude dist --exclude build --max-results 10000"
@@ -70,13 +70,11 @@ export function createFilesProvider(cwd: string): TelescopeProvider<string> {
 		},
 
 		async onSelect(item, ctx) {
-			const fullPath = resolve(cwd, item);
-			ctx.ui.pasteToEditor(fullPath);
+			ctx.ui.pasteToEditor(`@${item}`);
 		},
 
 		async onMultiSelect(items, ctx) {
-			const paths = items.map((i) => resolve(cwd, i));
-			ctx.ui.pasteToEditor(paths.join(" "));
+			ctx.ui.pasteToEditor(items.map((i) => `@${i}`).join(" "));
 		},
 
 		getPreview(item) {
@@ -94,8 +92,7 @@ export function createFilesProvider(cwd: string): TelescopeProvider<string> {
 
 		async onAction(actionKey, items, ctx) {
 			if (actionKey === "c") {
-				const paths = items.map((i) => resolve(cwd, i));
-				copyToClipboard(paths.join("\n"));
+				copyToClipboard(items.join("\n"));
 			} else if (actionKey === "i") {
 				const { readFileSync } = await import("node:fs");
 				for (const item of items) {
