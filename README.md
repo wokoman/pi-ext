@@ -39,7 +39,7 @@ Requires [Pi](https://github.com/badlogic/pi) v0.37.3+.
 
 ### [Leader Key](extensions/leader-key/)
 
-Press `Ctrl+Space` to open a floating command palette — like Vim's which-key or Emacs' leader key. Actions are organized into single-character groups (`s` for Session, `m` for Model, `f` for Favourites, `t` for Thinking level, `l` for Labels). Auto-discovers extension commands and merges them with built-in actions.
+Press `Ctrl+X` to open a floating command palette — like Vim's which-key or Emacs' leader key. Actions are organized into single-character groups (`s` for Session, `m` for Model, `f` for Favourites, `t` for Thinking level, `l` for Labels). Auto-discovers extension commands and merges them with built-in actions.
 
 Includes sub-modules:
 - **Model Switcher** — searchable provider → model → thinking level picker
