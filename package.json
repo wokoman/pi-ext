@@ -46,7 +46,7 @@
       "./skills/sem",
       "./skills/jira",
       "./skills/notion"
-    ],
+    ]
   },
   "private": true
 }
