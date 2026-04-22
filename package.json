@@ -14,7 +14,7 @@
   "optionalDependencies": {
     "@ataraxy-labs/sem": "^0.3.21"
   },
-  "description": "Personal collection of Pi extensions, themes, and skills.",
+  "description": "Personal collection of Pi extensions and skills.",
   "keywords": [
     "pi-package",
     "pi",
@@ -34,10 +34,7 @@
       "./extensions/session-query/session-query.ts",
       "./extensions/ask-user-question/index.ts",
       "./extensions/tool-pills/index.ts",
-      "./extensions/cmux/index.ts",
       "./extensions/session-snap/index.ts",
-      "./extensions/pi-telescope/index.ts",
-      "./extensions/handoff/index.ts",
       "./extensions/pi-sem/index.ts"
     ],
     "skills": [
@@ -50,9 +47,6 @@
       "./skills/jira",
       "./skills/notion"
     ],
-    "themes": [
-      "./themes"
-    ]
   },
   "private": true
 }
