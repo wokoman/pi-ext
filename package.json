@@ -44,7 +44,9 @@
       "./skills/visit-webpage",
       "./skills/web-search",
       "./skills/session-query",
-      "./skills/sem"
+      "./skills/sem",
+      "./skills/jira",
+      "./skills/notion"
     ],
     "themes": [
       "./themes"
