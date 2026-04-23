@@ -25,7 +25,7 @@ import { matchesKey, parseKey, Key } from "@mariozechner/pi-tui";
 import { searchableSelect } from "./model-switcher.js";
 import { runFavouriteModels } from "./favourite-models.js";
 import { OverlayFrame } from "../shared/overlay.js";
-import { copyToClipboard } from "@mariozechner/pi-coding-agent/dist/utils/clipboard.js";
+import { copyToClipboard } from "@mariozechner/pi-coding-agent";
 import type { ActionItem, ActionGroup, TopLevelEntry } from "./types.js";
 import { buildSessionEntries } from "./session-actions.js";
 import { buildLabelEntries } from "./label-actions.js";
@@ -185,7 +185,7 @@ function buildEntries(pi: ExtensionAPI, ctx: ExtensionContext): TopLevelEntry[] 
 		key: "y",
 		label: "Copy last response",
 		description: "copy assistant message to clipboard",
-		action: (ctx: ExtensionContext) => {
+		action: async (ctx: ExtensionContext) => {
 			const entries = ctx.sessionManager.getEntries();
 			for (let i = entries.length - 1; i >= 0; i--) {
 				const e = entries[i];
