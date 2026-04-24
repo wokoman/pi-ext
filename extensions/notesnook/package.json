@@ -1,0 +1,12 @@
+{
+  "name": "pi-extension-notesnook",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "marked": "^15.0.12"
+  },
+  "devDependencies": {
+    "@types/marked": "^6.0.0"
+  }
+}
