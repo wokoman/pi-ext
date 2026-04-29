@@ -36,6 +36,7 @@ If the user does not specify a title, derive one:
 ## Content guidelines
 
 - Send the **full** content the user wants saved (do not truncate).
+- Do **not** repeat the title as an `# H1` at the top of the content — Notesnook already renders the title above the body.
 - Preserve markdown formatting — it will be rendered correctly in Notesnook.
 - For code blocks, keep fenced ``` blocks — they convert to `<pre><code>` in HTML.
 - If the user says "save the last response" or "save the output above", use the most recent assistant-generated content.
@@ -44,17 +45,20 @@ If the user does not specify a title, derive one:
 
 | Error | Action |
 |-------|--------|
-| `NOTESNOOK_INBOX_API_KEY not set` | Tell the user to set the env var and explain the 3-step setup |
+| `missing_api_key` | Tell the user to create `~/.pi/notesnook.json` with `{ "apiKey": "<key>" }` and follow the setup steps in the extension README |
 | `401 Unauthorized` | Key is wrong or revoked — ask user to check Settings → Inbox → API Keys |
-| `403 Forbidden` | Inbox not enabled — ask user to enable it in Settings → Inbox |
+| `403 Forbidden` | Inbox not enabled — ask user to enable it in Settings → Inbox and sync |
+| `500 Misformed armored text` | PGP key issue — user needs Notesnook 3.4.x beta, must disable/re-enable Inbox API, choose Auto-generate keys, then sync |
 | `429 Rate limit` | Wait 60 s and retry once automatically |
 
 ## Setup reminder (only when key is missing)
 
 ```
-1. Open Notesnook → Settings → Inbox → Enable Inbox API
-2. Click "Create Key", give it a name (e.g. "pi"), set expiry
-3. Create ~/.pi/notesnook.json:
+1. Update Notesnook to 3.4.x beta (Settings → About → enable beta updates)
+2. Settings → Inbox → Enable Inbox API → choose Auto-generate keys → Save
+3. Sync Notesnook (uploads the PGP public key to the server)
+4. Settings → Inbox → Create Key → copy the nn__... key
+5. Create ~/.pi/notesnook.json:
    { "apiKey": "<your-key>" }
 
 Alternative: export NOTESNOOK_INBOX_API_KEY="<your-key>" (env var overrides the file)

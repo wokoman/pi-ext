@@ -101,6 +101,7 @@ export default function notesnookExtension(pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use send_to_notesnook when the user explicitly asks to save or send content to Notesnook.",
 			"Derive the title from context if not provided (e.g. first heading, conversation topic).",
+			"Do NOT repeat the title as an H1 at the top of the content — Notesnook already displays the title above the body.",
 			"Pass the full markdown content — it will be converted to HTML automatically.",
 			"Set favorite=true only when the user explicitly asks to favourite or star the note.",
 			"Set pinned=true only when the user explicitly asks to pin the note.",
