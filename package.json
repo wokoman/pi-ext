@@ -35,7 +35,8 @@
       "./extensions/ask-user-question/index.ts",
       "./extensions/tool-pills/index.ts",
       "./extensions/session-snap/index.ts",
-      "./extensions/pi-sem/index.ts"
+      "./extensions/pi-sem/index.ts",
+      "./extensions/notesnook/notesnook.ts"
     ],
     "skills": [
       "./skills/commit",
@@ -45,7 +46,8 @@
       "./skills/session-query",
       "./skills/sem",
       "./skills/jira",
-      "./skills/notion"
+      "./skills/notion",
+      "./skills/notesnook"
     ]
   },
   "private": true
