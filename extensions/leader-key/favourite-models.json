@@ -1,9 +1,15 @@
 [
   {
+    "label": "Opus 4.8",
+    "provider": "anthropic",
+    "model": "claude-opus-4-8",
+    "thinking": "high"
+  },
+  {
     "label": "Opus 4.7",
     "provider": "anthropic",
     "model": "claude-opus-4-7",
-    "thinking": "medium"
+    "thinking": "xhigh"
   },
   {
     "label": "Opus 4.6",
@@ -12,9 +18,27 @@
     "thinking": "medium"
   },
   {
+    "label": "Sonnet 5",
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
+    "thinking": "high"
+  },
+  {
     "label": "Sonnet 4.6",
     "provider": "anthropic",
     "model": "claude-sonnet-4-6",
+    "thinking": "medium"
+  },
+  {
+    "label": "GPT-5.4",
+    "provider": "openai-codex",
+    "model": "gpt-5.4",
+    "thinking": "high"
+  },
+  {
+    "label": "GPT-5.5",
+    "provider": "openai-codex",
+    "model": "gpt-5.5",
     "thinking": "medium"
   },
   {

@@ -52,6 +52,7 @@ For snapshot / folder review:
 - `sem diff --format json` is **not always smaller** than raw `git diff`
 - `sem` may under-cover tests, assets, generated files, or non-semantic glue code
 - Do not cite `sem` output alone as final evidence for line-level review comments
+- If a `sem_*` tool fails because the sem CLI is not found, run the equivalent `sem ...` command with the bash tool before giving up
 - If semantic coverage looks incomplete, fall back to raw `git diff`, `read`, `grep`, and file inspection
 
 ## Good prompts / tool choices
