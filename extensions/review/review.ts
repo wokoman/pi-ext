@@ -20,7 +20,7 @@
  * - `/review custom "check for security issues"` - custom instructions
  *
  * Project-specific review guidelines:
- * - If a REVIEW_GUIDELINES.md file exists in the same directory as .pi,
+ * - If a REVIEW_GUIDELINES.md file exists in cwd or a parent directory,
  *   its contents are appended to the review prompt.
  *
  * Note: PR review requires a clean working tree (no uncommitted changes to tracked files).
@@ -128,7 +128,9 @@ const REVIEW_RUBRIC = `# Review Guidelines
 
 You are acting as a code reviewer for a proposed code change made by another engineer.
 
-Below are default guidelines for determining what to flag. These are not the final word — if you encounter more specific guidelines elsewhere (in a developer message, user message, file, or project review guidelines appended below), those override these general instructions.
+Below are default guidelines for determining what to flag. These are not the final word — if you encounter more specific guidelines elsewhere (in a developer message, user message, available skill, repository docs, or project review guidelines appended below), those override these general instructions.
+
+Before finalizing findings, check the repository's own review sources when present: AGENTS.md, CLAUDE.md, README.md, docs/conventions.md, module docs, .github/pull_request_template.md, .github/CODEOWNERS, and the newest analogous implementation. If an available skill matches the review domain, load and follow it.
 
 ## Determining what to flag
 
@@ -196,22 +198,16 @@ async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> 
 	let currentDir = path.resolve(cwd);
 
 	while (true) {
-		const piDir = path.join(currentDir, ".pi");
 		const guidelinesPath = path.join(currentDir, "REVIEW_GUIDELINES.md");
-
-		const piStats = await fs.stat(piDir).catch(() => null);
-		if (piStats?.isDirectory()) {
-			const guidelineStats = await fs.stat(guidelinesPath).catch(() => null);
-			if (guidelineStats?.isFile()) {
-				try {
-					const content = await fs.readFile(guidelinesPath, "utf8");
-					const trimmed = content.trim();
-					return trimmed ? trimmed : null;
-				} catch {
-					return null;
-				}
+		const guidelineStats = await fs.stat(guidelinesPath).catch(() => null);
+		if (guidelineStats?.isFile()) {
+			try {
+				const content = await fs.readFile(guidelinesPath, "utf8");
+				const trimmed = content.trim();
+				return trimmed ? trimmed : null;
+			} catch {
+				return null;
 			}
-			return null;
 		}
 
 		const parentDir = path.dirname(currentDir);

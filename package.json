@@ -41,8 +41,8 @@
     "skills": [
       "./skills/commit",
       "./skills/github",
-      "./skills/visit-webpage",
-      "./skills/web-search",
+      "./skills/pr-body",
+      "./skills/repo-patterns",
       "./skills/session-query",
       "./skills/sem",
       "./skills/jira",

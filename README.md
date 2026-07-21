@@ -69,10 +69,10 @@ Registers an `ask_user_question` tool for structured clarifying questions with i
 | [github](skills/github/) | Recipes for the `gh` CLI — PR checks, CI runs, issue queries, JSON output |
 | [jira](skills/jira/) | Interact with Jira via `acli` — work item search, create, transition |
 | [notion](skills/notion/) | Interact with Notion via `notion-cli` — search, fetch, page CRUD, comments, databases |
+| [pr-body](skills/pr-body/) | Create or update GitHub PR bodies using the repo template and PR conventions |
+| [repo-patterns](skills/repo-patterns/) | Discover and follow repo-local conventions before editing or reviewing |
 | [sem](skills/sem/) | Entity-aware change analysis workflow |
 | [session-query](skills/session-query/) | Guide for querying past pi sessions |
-| [visit-webpage](skills/visit-webpage/) | Fetch and extract content from a URL as markdown |
-| [web-search](skills/web-search/) | Lightweight web search via Jina Search API |
 
 ## Configuration
 
