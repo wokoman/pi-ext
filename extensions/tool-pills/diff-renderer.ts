@@ -16,6 +16,7 @@ import { extname, relative } from "node:path";
 import { codeToANSI } from "@shikijs/cli";
 import * as Diff from "diff";
 import type { BundledLanguage, BundledTheme } from "shiki";
+import { renderAutomodeBlock } from "./automode-block.js";
 
 // ---------------------------------------------------------------------------
 // Diff Theme System
@@ -1246,7 +1247,7 @@ export function registerDiffTools(pi: any): void {
 						?.filter((c: any) => c.type === "text")
 						.map((c: any) => c.text || "")
 						.join("\n") ?? "Error";
-				text.setText(`\n${theme.fg("error", e)}`);
+				text.setText(renderAutomodeBlock(e, theme) ?? `\n${theme.fg("error", e)}`);
 				return text;
 			}
 
@@ -1513,7 +1514,7 @@ export function registerDiffTools(pi: any): void {
 						?.filter((c: any) => c.type === "text")
 						.map((c: any) => c.text || "")
 						.join("\n") ?? "Error";
-				text.setText(`\n${theme.fg("error", e)}`);
+				text.setText(renderAutomodeBlock(e, theme) ?? `\n${theme.fg("error", e)}`);
 				return text;
 			}
 

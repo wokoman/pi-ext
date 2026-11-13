@@ -17,6 +17,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { pill } from "./pill.js";
+import { renderAutomodeBlock } from "./automode-block.js";
 import { registerDiffTools } from "./diff-renderer.js";
 
 /** Max lines shown in collapsed (non-expanded) result view */
@@ -38,6 +39,8 @@ function renderTextResult(
 	mode: "head" | "tail" = "head",
 ): Text {
 	if (!text || !text.trim()) return new Text("", 0, 0);
+	const blocked = renderAutomodeBlock(text, theme);
+	if (blocked) return new Text(blocked, 0, 0);
 
 	const lines = text.split("\n");
 
