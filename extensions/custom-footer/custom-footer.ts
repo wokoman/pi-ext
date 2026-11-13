@@ -1,8 +1,7 @@
 /**
  * Custom Footer Extension — Two-line compact powerline style
  *
- * Line 1:  MODE  ~/path (branch) │ 42%/200k │ ⚡ model • thinking
- * Line 2: Provider  S ████████ 23%  ⟳ 2h 14m  W ██████░░ 67%  ⟳ 3d 5h
+ * One line:  MODE  ~/path (branch) │ 42%/200k │ ⚡ model • thinking │ extension statuses
  *
  * Rendered as a belowEditor widget (not setFooter) so sub-bar appears below us.
  */
@@ -28,6 +27,19 @@ import { startOpenRouterPolling, renderOpenRouterStats, type OpenRouterPoller } 
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
+/**
+ * Condense pi-automode's "AM ● a:39 d:3 ca:39 cd:2" to what matters at a glance:
+ * whether it is on, and how many calls it blocked this session.
+ */
+function renderAutomodeStatus(text: string, theme: { fg: (role: any, text: string) => string }): string {
+	const plain = text.replace(/\x1b\[[0-9;]*m/g, "");
+	if (plain.includes("○")) return theme.fg("warning", "🛡 auto off");
+	const denied = Number(/\bd:(\d+)/.exec(plain)?.[1] ?? 0);
+	return denied > 0
+		? theme.fg("accent", "🛡 auto") + theme.fg("error", ` ${denied} blocked`)
+		: theme.fg("accent", "🛡 auto");
+}
+
 function getGitBranch(cwd: string): string | null {
 	try {
 		return execSync("git branch --show-current", { cwd, encoding: "utf-8", timeout: 500 }).trim() || null;
@@ -39,12 +51,14 @@ function getGitBranch(cwd: string): string | null {
 // ── Extension ──────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
-	let currentMode: PermissionMode = "safe";
+	// Set only while the permissions extension is loaded and announces a mode.
+	let currentMode: PermissionMode | null = null;
 	let tuiRef: { requestRender(): void } | null = null;
 	let gitBranch: string | null = null;
 	let gitWatcher: FSWatcher | undefined;
 	let orPoller: OpenRouterPoller | undefined;
 	let currentModel: { provider?: string; id?: string; contextWindow?: number } | null | undefined = null;
+	let footerData: { getExtensionStatuses(): ReadonlyMap<string, string> } | null = null;
 
 	pi.events.on("mode:change", (data: unknown) => {
 		currentMode = data as PermissionMode;
@@ -98,11 +112,11 @@ export default function (pi: ExtensionAPI) {
 			{ placement: "belowEditor" },
 		);
 
-		// Suppress default pi footer (empty render)
-		ctx.ui.setFooter(() => ({
-			render() { return []; },
-			invalidate() {},
-		}));
+		// Suppress pi's footer; keep its data so line 1 can show extension statuses (automode, usage limits).
+		ctx.ui.setFooter((_footerTui, _footerTheme, data) => {
+			footerData = data;
+			return { render() { return []; }, invalidate() {} };
+		});
 	});
 
 	pi.on("session_shutdown", async () => {
@@ -121,8 +135,8 @@ export default function (pi: ExtensionAPI) {
 		const sepW = 3;
 
 		// Mode pill
-		const pill = renderModePill(currentMode, theme);
-		const pillW = modePillWidth(currentMode);
+		const pill = currentMode ? renderModePill(currentMode, theme) : "";
+		const pillW = currentMode ? modePillWidth(currentMode) : 0;
 
 		// Path + branch
 		const pathRaw = buildPathString(process.cwd(), gitBranch);
@@ -145,18 +159,25 @@ export default function (pi: ExtensionAPI) {
 		const orStats = provider === "openrouter" ? orPoller?.get() ?? null : null;
 		const orRendered = orStats ? renderOpenRouterStats(orStats, theme) : null;
 
+		// Extension statuses; ponytail's is noise in the footer.
+		const statuses = [...(footerData?.getExtensionStatuses() ?? new Map<string, string>())]
+			.filter(([key, text]) => key !== "ponytail" && text)
+			.map(([key, text]) => (key === "pi-automode" ? renderAutomodeStatus(text, theme) : text));
+		const statusesWidth = statuses.reduce((w, t) => w + sepW + visibleWidth(t), 0);
+
 		// Layout: compute path budget from remaining space
 		const orWidth = orRendered ? sepW + orRendered.rawWidth : 0;
-		const rightBlockWidth = visibleWidth(ctxRaw) + sepW + model.rawWidth + orWidth;
+		const rightBlockWidth = visibleWidth(ctxRaw) + sepW + model.rawWidth + orWidth + statusesWidth;
 		const pathBudget = width - pillW - sepW - rightBlockWidth - sepW;
 		const pathDisplay = renderPath(pathRaw, pathBudget, theme);
 
 		// Assemble
-		const segments: string[] = [pill];
+		const segments: string[] = pill ? [pill] : [];
 		if (pathDisplay) segments.push(pathDisplay);
 		segments.push(ctxColored);
 		segments.push(model.text);
 		if (orRendered) segments.push(orRendered.text);
+		segments.push(...statuses);
 
 		return truncateToWidth(segments.join(sep), width);
 	}
